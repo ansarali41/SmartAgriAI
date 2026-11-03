@@ -20,13 +20,17 @@ export async function GET(req: Request) {
       garden: { userId: gate },
     },
     orderBy: { createdAt: "desc" },
-    include: { garden: { select: { name: true } } },
+    include: {
+      garden: { select: { name: true } },
+      potMappings: { select: { pot: { select: { id: true, label: true } } }, orderBy: { createdAt: "asc" } },
+    },
     // Never expose apiKeyHash.
     omit: { apiKeyHash: true },
   });
   const now = new Date();
-  return NextResponse.json(devices.map((device) => ({
+  return NextResponse.json(devices.map(({ potMappings, ...device }) => ({
     ...device,
+    pots: potMappings.map((mapping) => mapping.pot),
     status: getDeviceConnectionStatus(device.lastSeenAt, now),
   })));
 }
@@ -48,6 +52,8 @@ const schema = z.object({
       "camera",
     ])
     .default("esp32_node"),
+  // Connect the new device to this pot (same garden) as part of registering it.
+  potId: z.string().trim().min(1).optional(),
 });
 
 export async function POST(req: Request) {
@@ -67,10 +73,24 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Garden not found" }, { status: 404 });
     }
 
+    const { potId, ...deviceData } = parsed.data;
+    if (potId) {
+      const pot = await prisma.pot.findFirst({
+        where: { id: potId, userId, gardenId: deviceData.gardenId },
+        select: { id: true },
+      });
+      if (!pot) {
+        return NextResponse.json({ error: "Pot not found in this garden" }, { status: 400 });
+      }
+    }
     const { plain, hash } = generateDeviceKey();
-    const device = await prisma.device.create({
-      data: { ...parsed.data, userId, apiKeyHash: hash },
-      omit: { apiKeyHash: true },
+    const device = await prisma.$transaction(async (tx) => {
+      const created = await tx.device.create({
+        data: { ...deviceData, userId, apiKeyHash: hash },
+        omit: { apiKeyHash: true },
+      });
+      if (potId) await tx.devicePotMapping.create({ data: { deviceId: created.id, potId } });
+      return created;
     });
 
     // Plaintext key is returned exactly once — store it on the ESP32.

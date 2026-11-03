@@ -1,5 +1,5 @@
 // Copy this file to secrets.h (which is ignored by Git) before compiling.
-// Register the device from the SmartAgriAI Sensors page and use the returned
+// Register the device from the SmartAgri Sensors page and use the returned
 // one-time device key plus its registered hardware ID and mapped pot ID.
 
 #define WIFI_SSID "YOUR_WIFI_SSID"

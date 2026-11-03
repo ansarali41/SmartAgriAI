@@ -20,7 +20,7 @@ export function LandingNavigation({ signedIn }: { signedIn: boolean }) {
         <span className="grid h-10 w-10 place-items-center rounded-xl bg-emerald-600 text-white shadow-lg shadow-emerald-600/20">
           <Sprout size={22} aria-hidden="true" />
         </span>
-        SmartAgriAI
+        SmartAgri
       </Link>
 
       <nav className="hidden items-center gap-7 md:flex" aria-label="Main navigation">

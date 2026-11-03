@@ -1,4 +1,4 @@
-# SmartAgriAI
+# SmartAgri
 
 **AI-Driven IoT Framework for Crop Health Prediction and Smart Irrigation Management.**
 

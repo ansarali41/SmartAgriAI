@@ -1,58 +1,83 @@
 "use client";
 
-// PAGE: Gardens CRUD - create/list/edit/delete growing areas. (Also exports the
-// shared <Input> control reused by the Pots/Plants/Sensors/Settings forms.)
-import { useEffect, useState } from "react";
+// PAGE: Gardens CRUD - create/list/edit/delete growing areas and choose the
+// active garden used by the rest of the app.
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import Link from "next/link";
-import { Check, MapPin, Pencil, Radio, Trash2, Trees, X } from "lucide-react";
-import { Badge, Card, IconButton, PageHeader } from "@/components/ui";
-import { Input } from "@/components/Input";
+import {
+  ArrowRight,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  CircleCheck,
+  Cpu,
+  Droplets,
+  EllipsisVertical,
+  Eye,
+  Flower2,
+  MapPin,
+  Package,
+  Pencil,
+  Plus,
+  Search,
+  Trash2,
+  Trees,
+  X,
+  type LucideIcon,
+} from "lucide-react";
+import { Card, PageHeader } from "@/components/ui";
+import {
+  GARDEN_TYPES,
+  GardenFields,
+  emptyForm,
+  gardenToForm,
+  gardenType,
+  parseGardenForm,
+  type Garden,
+  type GardenForm,
+  type GardenOverview,
+} from "@/components/GardenForm";
+import { SlideOver } from "@/components/SlideOver";
+import { useDismiss } from "@/components/HeaderMenus";
 import { apiDelete, apiPatch, apiPost } from "@/lib/api-client";
 import { getSelectedGardenId, setSelectedGardenId } from "@/lib/selected-garden";
 
-interface Garden {
-  id: string;
-  name: string;
-  type: string;
-  location: string | null;
-  lat: number | null;
-  lng: number | null;
-  createdAt: string;
-  updatedAt: string;
-  _count: { pots: number; plants: number; devices: number };
+const PAGE_SIZE = 6;
+
+type StatusFilter = "all" | "online" | "attention" | "none";
+type SortKey = "recent" | "name" | "pots" | "created";
+
+const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
+  { value: "all", label: "All statuses" },
+  { value: "online", label: "All devices online" },
+  { value: "attention", label: "Needs attention" },
+  { value: "none", label: "No devices" },
+];
+
+const SORTS: { value: SortKey; label: string }[] = [
+  { value: "recent", label: "Recently updated" },
+  { value: "created", label: "Newest first" },
+  { value: "name", label: "Name (A–Z)" },
+  { value: "pots", label: "Most pots" },
+];
+
+function deviceHealth(garden: Garden, overview?: GardenOverview): Exclude<StatusFilter, "all"> {
+  if (garden._count.devices === 0) return "none";
+  return overview && overview.deviceSummary.online === garden._count.devices ? "online" : "attention";
 }
 
-interface GardenForm {
-  name: string;
-  type: string;
-  location: string;
-  lat: string;
-  lng: string;
-}
-
-interface GardenOverview {
-  id: string;
-  deviceSummary: { online: number; offline: number };
-  pumpsOn: number;
-}
-
-const emptyForm: GardenForm = {
-  name: "",
-  type: "outdoor",
-  location: "",
-  lat: "",
-  lng: "",
-};
-
-function parseGardenForm(form: GardenForm) {
-  return {
-    name: form.name,
-    type: form.type,
-    location: form.location || undefined,
-    lat: Number(form.lat),
-    lng: Number(form.lng),
-  };
+/** Page numbers to show, with "…" gaps for long ranges: 1 … 4 5 6 … 12 */
+function pageList(current: number, total: number): (number | "…")[] {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const pages = new Set([1, total, current - 1, current, current + 1]);
+  const sorted = [...pages].filter((p) => p >= 1 && p <= total).sort((a, b) => a - b);
+  const out: (number | "…")[] = [];
+  sorted.forEach((p, i) => {
+    if (i > 0 && p - sorted[i - 1] > 1) out.push("…");
+    out.push(p);
+  });
+  return out;
 }
 
 export default function GardensPage() {
@@ -61,12 +86,17 @@ export default function GardensPage() {
     "/api/gardens/overview",
     { refreshInterval: 30000 },
   );
-  const [form, setForm] = useState<GardenForm>(emptyForm);
   const [selectedId, setSelectedId] = useState("");
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editing, setEditing] = useState<GardenForm>(emptyForm);
+  // null = drawer closed, "new" = creating, otherwise the id being edited.
+  const [drawer, setDrawer] = useState<"new" | string | null>(null);
+  const [form, setForm] = useState<GardenForm>(emptyForm);
   const [error, setError] = useState("");
-  const [editError, setEditError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [query, setQuery] = useState("");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [sort, setSort] = useState<SortKey>("recent");
+  const [requestedPage, setRequestedPage] = useState(1);
 
   const selectedGarden =
     gardens?.find((garden) => garden.id === selectedId) ?? gardens?.[0];
@@ -74,6 +104,70 @@ export default function GardensPage() {
   const overviewByGardenId = new Map(
     (gardenOverviews ?? []).map((overview) => [overview.id, overview]),
   );
+  const editingGarden = drawer && drawer !== "new" ? gardens?.find((g) => g.id === drawer) : undefined;
+
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    const overviews = new Map((gardenOverviews ?? []).map((o) => [o.id, o]));
+    const list = (gardens ?? []).filter((garden) => {
+      if (typeFilter !== "all" && garden.type !== typeFilter) return false;
+      if (statusFilter !== "all" && deviceHealth(garden, overviews.get(garden.id)) !== statusFilter) {
+        return false;
+      }
+      if (!needle) return true;
+      return [garden.name, garden.location ?? "", gardenType(garden.type).label].some((field) =>
+        field.toLowerCase().includes(needle),
+      );
+    });
+    return list.sort((a, b) => {
+      switch (sort) {
+        case "name":
+          return a.name.localeCompare(b.name);
+        case "pots":
+          return b._count.pots - a._count.pots || a.name.localeCompare(b.name);
+        case "created":
+          return b.createdAt.localeCompare(a.createdAt);
+        default:
+          return b.updatedAt.localeCompare(a.updatedAt);
+      }
+    });
+  }, [gardens, gardenOverviews, query, typeFilter, statusFilter, sort]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  // Clamp rather than reset in an effect, so deleting the last card on a page
+  // simply lands on the previous one.
+  const page = Math.min(requestedPage, totalPages);
+  const pageItems = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const filtersActive = query.trim() !== "" || typeFilter !== "all" || statusFilter !== "all";
+
+  // Any change to what's being listed starts again from page 1.
+  function updateFilter<T>(setter: (value: T) => void) {
+    return (value: T) => {
+      setter(value);
+      setRequestedPage(1);
+    };
+  }
+
+  function clearFilters() {
+    setQuery("");
+    setTypeFilter("all");
+    setStatusFilter("all");
+    setRequestedPage(1);
+  }
+
+  const totals = (gardens ?? []).reduce(
+    (sum, garden) => ({
+      pots: sum.pots + garden._count.pots,
+      plants: sum.plants + garden._count.plants,
+      devices: sum.devices + garden._count.devices,
+    }),
+    { pots: 0, plants: 0, devices: 0 },
+  );
+  const devicesOnline = (gardenOverviews ?? []).reduce(
+    (sum, overview) => sum + overview.deviceSummary.online,
+    0,
+  );
+  const pumpsOn = (gardenOverviews ?? []).reduce((sum, overview) => sum + overview.pumpsOn, 0);
 
   useEffect(() => {
     if (!gardens?.length || selectedId) return;
@@ -89,344 +183,605 @@ export default function GardensPage() {
     if (selectedId) setSelectedGardenId(selectedId);
   }, [selectedId]);
 
-  async function create(e: React.FormEvent) {
-    e.preventDefault();
+  function openCreate() {
     setError("");
+    setForm(emptyForm);
+    setDrawer("new");
+  }
+
+  function openEdit(garden: Garden) {
+    setError("");
+    setForm(gardenToForm(garden));
+    setDrawer(garden.id);
+  }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!drawer) return;
+    setError("");
+    setSaving(true);
     try {
-      await apiPost("/api/gardens", parseGardenForm(form));
-      setForm(emptyForm);
+      if (drawer === "new") {
+        await apiPost("/api/gardens", parseGardenForm(form));
+      } else {
+        await apiPatch(`/api/gardens/${drawer}`, parseGardenForm(form));
+      }
+      setDrawer(null);
       mutate();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed");
+    } finally {
+      setSaving(false);
     }
   }
 
-  function startEdit(garden: Garden) {
-    setEditError("");
-    setEditingId(garden.id);
-    setEditing({
-      name: garden.name,
-      type: garden.type,
-      location: garden.location ?? "",
-      lat: garden.lat != null ? String(garden.lat) : "",
-      lng: garden.lng != null ? String(garden.lng) : "",
-    });
-  }
-
-  async function saveEdit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!editingId) return;
-    setEditError("");
+  async function remove(garden: Garden) {
+    const confirmed = window.confirm(
+      `Delete "${garden.name}"? Its ${garden._count.pots} pots, ${garden._count.plants} plants and sensor history will be removed.`,
+    );
+    if (!confirmed) return;
     try {
-      await apiPatch(`/api/gardens/${editingId}`, parseGardenForm(editing));
-      setEditingId(null);
+      await apiDelete(`/api/gardens/${garden.id}`);
+      if (activeSelectedId === garden.id) setSelectedId("");
       mutate();
     } catch (err) {
-      setEditError(err instanceof Error ? err.message : "Failed");
+      window.alert(err instanceof Error ? err.message : "Failed to delete garden");
     }
-  }
-
-  async function remove(id: string) {
-    await apiDelete(`/api/gardens/${id}`);
-    if (activeSelectedId === id) setSelectedId("");
-    mutate();
   }
 
   return (
-    <div>
-      <PageHeader title="Gardens" subtitle="Group your pots, plants and sensors by growing area." />
-
-      <Card className="mb-6">
-        <form onSubmit={create} className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
-          <Input
-            label="Name"
-            value={form.name}
-            onChange={(name) => setForm({ ...form, name })}
-            placeholder="North Field"
-            required
-          />
-          <SelectField
-            label="Type"
-            value={form.type}
-            onChange={(type) => setForm({ ...form, type })}
-          />
-          <Input
-            label="Location"
-            value={form.location}
-            onChange={(location) => setForm({ ...form, location })}
-            placeholder="Dhaka"
-          />
-          <Input
-            label="Latitude"
-            value={form.lat}
-            onChange={(lat) => setForm({ ...form, lat })}
-            placeholder="23.81"
-            type="number"
-            step="any"
-            required
-          />
-          <Input
-            label="Longitude"
-            value={form.lng}
-            onChange={(lng) => setForm({ ...form, lng })}
-            placeholder="90.41"
-            type="number"
-            step="any"
-            required
-          />
-          <div className="flex items-end">
-            <button className="w-full rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700">
-              Add garden
-            </button>
-          </div>
-        </form>
-        {error ? <p className="mt-2 text-sm font-bold text-rose-600">{error}</p> : null}
-      </Card>
-
-      <div className="mb-6 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)]">
-        <Card>
-          <div className="flex flex-wrap items-end justify-between gap-3">
-            <div>
-              <p className="text-sm font-black uppercase tracking-wide text-slate-500">
-                Active garden
-              </p>
-              <p className="mt-1 text-2xl font-black">
-                {selectedGarden?.name ?? "No garden selected"}
-              </p>
-            </div>
-            <label className="block min-w-56">
-              <span className="mb-1 block text-sm font-bold text-slate-700 dark:text-slate-200">
-                Switch garden
-              </span>
-              <select
-                value={activeSelectedId}
-                onChange={(e) => setSelectedId(e.target.value)}
-                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
-              >
-                {(gardens ?? []).map((garden) => (
-                  <option key={garden.id} value={garden.id}>
-                    {garden.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          {selectedGarden ? (
-            <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
-              <Detail label="Latitude" value={formatCoordinate(selectedGarden.lat)} />
-              <Detail label="Longitude" value={formatCoordinate(selectedGarden.lng)} />
-              <Detail label="Created" value={formatDate(selectedGarden.createdAt)} />
-              <Detail label="Updated" value={formatDate(selectedGarden.updatedAt)} />
-            </div>
-          ) : (
-            <p className="mt-4 text-sm text-slate-400">Create a garden to start switching between gardens.</p>
-          )}
-        </Card>
-
-        <Card>
-          <p className="text-sm font-black uppercase tracking-wide text-slate-500">
-            Garden summary
-          </p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Badge tone="emerald">{gardens?.length ?? 0} gardens</Badge>
-            <Badge tone="slate">{selectedGarden?._count.pots ?? 0} pots</Badge>
-            <Badge tone="slate">{selectedGarden?._count.plants ?? 0} plants</Badge>
-            <Badge tone="slate">{selectedGarden?._count.devices ?? 0} devices</Badge>
-            {activeSelectedId && overviewByGardenId.get(activeSelectedId) ? (
-              <Badge tone={overviewByGardenId.get(activeSelectedId)!.deviceSummary.offline ? "amber" : "sky"}>
-                <Radio className="mr-1" size={12} />
-                {overviewByGardenId.get(activeSelectedId)!.deviceSummary.online} online
-              </Badge>
-            ) : null}
-            {(overviewByGardenId.get(activeSelectedId)?.pumpsOn ?? 0) > 0 ? (
-              <Badge tone="emerald">{overviewByGardenId.get(activeSelectedId)!.pumpsOn} pump on</Badge>
-            ) : null}
-          </div>
-          {activeSelectedId ? (
-            <Link
-              href={`/gardens/${activeSelectedId}`}
-              className="mt-4 inline-block text-sm font-bold text-emerald-600"
+    <div className="mx-auto max-w-7xl">
+      <PageHeader
+        title="Gardens"
+        subtitle="Group your pots, plants and sensors by growing area."
+        action={
+          gardens?.length ? (
+            <button
+              type="button"
+              onClick={openCreate}
+              className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600"
             >
-              Open garden dashboard →
-            </Link>
-          ) : null}
-        </Card>
+              <Plus size={16} />
+              New garden
+            </button>
+          ) : null
+        }
+      />
+
+      <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <SummaryTile icon={Trees} label="Gardens" value={gardens?.length ?? 0} />
+        <SummaryTile icon={Package} label="Pots" value={totals.pots} />
+        <SummaryTile icon={Flower2} label="Plants" value={totals.plants} />
+        <SummaryTile
+          icon={Cpu}
+          label="Devices online"
+          value={
+            <>
+              {devicesOnline}
+              <span className="text-base font-bold text-slate-400"> / {totals.devices}</span>
+            </>
+          }
+          note={pumpsOn > 0 ? `${pumpsOn} pump${pumpsOn > 1 ? "s" : ""} running` : undefined}
+        />
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {(gardens ?? []).map((garden) => (
-          <Card
-            key={garden.id}
-            className={garden.id === activeSelectedId ? "border-emerald-200 dark:border-emerald-900" : ""}
+      {!gardens ? (
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {[0, 1, 2].map((i) => (
+            <div
+              key={i}
+              className="h-64 animate-pulse rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900"
+            />
+          ))}
+        </div>
+      ) : gardens.length === 0 ? (
+        <Card className="flex flex-col items-center py-14 text-center">
+          <span className="grid h-14 w-14 place-items-center rounded-2xl bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400">
+            <Trees size={26} />
+          </span>
+          <h2 className="mt-4 text-lg font-black">No gardens yet</h2>
+          <p className="mt-1 max-w-sm text-sm text-slate-500 dark:text-slate-400">
+            Create a garden for each growing area, then add pots, plants and sensors to it.
+          </p>
+          <button
+            type="button"
+            onClick={openCreate}
+            className="mt-5 inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-700"
           >
-            {editingId === garden.id ? (
-              <form onSubmit={saveEdit} className="space-y-3">
-                <Input
-                  label="Name"
-                  value={editing.name}
-                  onChange={(name) => setEditing({ ...editing, name })}
-                  required
-                />
-                <SelectField
-                  label="Type"
-                  value={editing.type}
-                  onChange={(type) => setEditing({ ...editing, type })}
-                />
-                <Input
-                  label="Location"
-                  value={editing.location}
-                  onChange={(location) => setEditing({ ...editing, location })}
-                />
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <Input
-                    label="Latitude"
-                    value={editing.lat}
-                    onChange={(lat) => setEditing({ ...editing, lat })}
-                    type="number"
-                    step="any"
-                    required
-                  />
-                  <Input
-                    label="Longitude"
-                    value={editing.lng}
-                    onChange={(lng) => setEditing({ ...editing, lng })}
-                    type="number"
-                    step="any"
-                    required
-                  />
-                </div>
-                {editError ? <p className="text-sm font-bold text-rose-600">{editError}</p> : null}
-                <div className="flex justify-end gap-2">
-                  <IconButton
-                    type="button"
-                    onClick={() => setEditingId(null)}
-                    className="border-slate-300 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-900"
-                    aria-label="Cancel edit"
-                  >
-                    <X size={16} />
-                  </IconButton>
-                  <IconButton
-                    type="submit"
-                    className="border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700"
-                    aria-label="Save garden"
-                  >
-                    <Check size={16} />
-                  </IconButton>
-                </div>
-              </form>
-            ) : (
-              <>
-                <div className="flex items-start justify-between gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setSelectedId(garden.id)}
-                    className="flex min-w-0 items-start gap-2 text-left"
-                  >
-                    <span className="rounded-lg bg-emerald-50 p-2 text-emerald-600 dark:bg-emerald-950">
-                      <Trees size={18} />
-                    </span>
-                    <span className="min-w-0">
-                      <span className="block truncate font-black">{garden.name}</span>
-                      <span className="flex items-center gap-1 text-xs text-slate-500">
-                        <MapPin size={12} />
-                        {garden.location || "No location label"}
-                      </span>
-                    </span>
-                  </button>
-                  <div className="flex gap-2">
-                    <IconButton
-                      onClick={() => startEdit(garden)}
-                      className="border-transparent text-slate-400 hover:bg-emerald-50 hover:text-emerald-600 dark:hover:bg-emerald-950/40"
-                      aria-label="Edit garden"
-                    >
-                      <Pencil size={16} />
-                    </IconButton>
-                    <IconButton
-                      onClick={() => remove(garden.id)}
-                      className="border-transparent text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-950/40"
-                      aria-label="Delete garden"
-                    >
-                      <Trash2 size={16} />
-                    </IconButton>
-                  </div>
-                </div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <Badge tone="emerald">{garden.type}</Badge>
-                  <Badge tone="slate">{garden._count.pots} pots</Badge>
-                  <Badge tone="slate">{garden._count.plants} plants</Badge>
-                  {overviewByGardenId.get(garden.id) ? (
-                    <Badge tone={overviewByGardenId.get(garden.id)!.deviceSummary.offline ? "amber" : "sky"}>
-                      <Radio className="mr-1" size={12} />
-                      {overviewByGardenId.get(garden.id)!.deviceSummary.online} online
-                      {overviewByGardenId.get(garden.id)!.deviceSummary.offline
-                        ? ` · ${overviewByGardenId.get(garden.id)!.deviceSummary.offline} offline`
-                        : ""}
-                    </Badge>
-                  ) : null}
-                  {(overviewByGardenId.get(garden.id)?.pumpsOn ?? 0) > 0 ? (
-                    <Badge tone="emerald">{overviewByGardenId.get(garden.id)!.pumpsOn} pump on</Badge>
-                  ) : null}
-                </div>
-                <div className="mt-3 rounded-lg bg-slate-50 p-3 text-xs font-medium text-slate-500 dark:bg-slate-900 dark:text-slate-400">
-                  {formatCoordinate(garden.lat)}, {formatCoordinate(garden.lng)}
-                </div>
-                <Link
-                  href={`/gardens/${garden.id}`}
-                  className="mt-4 inline-block text-sm font-bold text-emerald-600"
-                >
-                  Open garden dashboard →
-                </Link>
-              </>
-            )}
+            <Plus size={16} />
+            Create your first garden
+          </button>
+        </Card>
+      ) : (
+        <>
+        <div className="mb-5 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900 lg:flex-row lg:items-center">
+          <label className="relative min-w-0 flex-1">
+            <span className="sr-only">Search gardens</span>
+            <Search
+              size={16}
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+              aria-hidden="true"
+            />
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => updateFilter(setQuery)(e.target.value)}
+              placeholder="Search by name, location or type…"
+              className="w-full rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-9 text-sm placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-700 dark:bg-slate-950 [&::-webkit-search-cancel-button]:hidden"
+            />
+            {query ? (
+              <button
+                type="button"
+                onClick={() => updateFilter(setQuery)("")}
+                aria-label="Clear search"
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+              >
+                <X size={14} />
+              </button>
+            ) : null}
+          </label>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:flex lg:items-center">
+            <ToolbarSelect
+              label="Type"
+              value={typeFilter}
+              onChange={updateFilter(setTypeFilter)}
+              options={[
+                { value: "all", label: "All types" },
+                ...Object.entries(GARDEN_TYPES).map(([value, type]) => ({ value, label: type.label })),
+              ]}
+            />
+            <ToolbarSelect
+              label="Device status"
+              value={statusFilter}
+              onChange={(value) => updateFilter(setStatusFilter)(value as StatusFilter)}
+              options={STATUS_FILTERS}
+            />
+            <ToolbarSelect
+              label="Sort by"
+              value={sort}
+              onChange={(value) => updateFilter(setSort)(value as SortKey)}
+              options={SORTS}
+              className="col-span-2 sm:col-span-1"
+            />
+            {filtersActive ? (
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="col-span-2 inline-flex items-center justify-center gap-1 rounded-lg px-3 py-2 text-sm font-semibold text-emerald-600 hover:bg-emerald-50 sm:col-span-3 dark:text-emerald-400 dark:hover:bg-emerald-500/10 lg:col-span-1"
+              >
+                <X size={14} />
+                Clear
+              </button>
+            ) : null}
+          </div>
+        </div>
+
+        {filtered.length === 0 ? (
+          <Card className="flex flex-col items-center py-12 text-center">
+            <Search size={24} className="text-slate-400" />
+            <h2 className="mt-3 font-black">No gardens match</h2>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              Try a different search term or remove some filters.
+            </p>
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="mt-4 rounded-lg border border-slate-300 px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              Clear filters
+            </button>
           </Card>
-        ))}
-        {gardens && gardens.length === 0 ? (
-          <p className="text-sm text-slate-400">No gardens yet. Add your first above.</p>
+        ) : (
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {pageItems.map((garden) => (
+            <GardenCard
+              key={garden.id}
+              garden={garden}
+              overview={overviewByGardenId.get(garden.id)}
+              active={garden.id === activeSelectedId}
+              onActivate={() => setSelectedId(garden.id)}
+              onEdit={() => openEdit(garden)}
+              onDelete={() => remove(garden)}
+            />
+          ))}
+        </div>
+        )}
+
+        {totalPages > 1 ? (
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            from={(page - 1) * PAGE_SIZE + 1}
+            to={Math.min(page * PAGE_SIZE, filtered.length)}
+            total={filtered.length}
+            onChange={setRequestedPage}
+          />
         ) : null}
-      </div>
+        </>
+      )}
+
+      <SlideOver
+        open={drawer !== null}
+        onClose={() => setDrawer(null)}
+        title={editingGarden ? `Edit ${editingGarden.name}` : "New garden"}
+        description="Coordinates are used for live weather and rain-aware irrigation."
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setDrawer(null)}
+              className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form="garden-form"
+              disabled={saving}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-60"
+            >
+              {editingGarden ? <Check size={16} /> : <Plus size={16} />}
+              {saving ? "Saving…" : editingGarden ? "Save changes" : "Create garden"}
+            </button>
+          </>
+        }
+      >
+        <form id="garden-form" onSubmit={submit} className="space-y-4">
+          <GardenFields value={form} onChange={setForm} withPlaceholders={!editingGarden} />
+          {error ? <p className="text-sm font-bold text-rose-600">{error}</p> : null}
+        </form>
+      </SlideOver>
     </div>
   );
 }
 
-function SelectField({
+function ToolbarSelect({
   label,
   value,
   onChange,
+  options,
+  className = "",
 }: {
   label: string;
   value: string;
-  onChange: (v: string) => void;
+  onChange: (value: string) => void;
+  options: { value: string; label: string }[];
+  className?: string;
 }) {
   return (
-    <label className="block">
-      <span className="mb-1 block text-sm font-bold text-slate-700 dark:text-slate-200">{label}</span>
+    <label className={`block ${className}`}>
+      <span className="sr-only">{label}</span>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+        className={`w-full rounded-lg border bg-white py-2 pl-3 pr-8 text-sm font-medium focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:bg-slate-950 lg:w-48 ${
+          value === options[0].value
+            ? "border-slate-300 text-slate-700 dark:border-slate-700 dark:text-slate-200"
+            : "border-emerald-500/60 text-emerald-700 dark:border-emerald-500/50 dark:text-emerald-300"
+        }`}
       >
-        <option value="outdoor">Outdoor</option>
-        <option value="greenhouse">Greenhouse</option>
-        <option value="indoor">Indoor</option>
-        <option value="hydroponic">Hydroponic</option>
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
       </select>
     </label>
   );
 }
 
-function Detail({ label, value }: { label: string; value: string }) {
+function Pagination({
+  page,
+  totalPages,
+  from,
+  to,
+  total,
+  onChange,
+}: {
+  page: number;
+  totalPages: number;
+  from: number;
+  to: number;
+  total: number;
+  onChange: (page: number) => void;
+}) {
+  const buttonClass =
+    "grid h-9 min-w-9 place-items-center rounded-lg px-2 text-sm font-semibold transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 disabled:cursor-not-allowed disabled:opacity-40";
   return (
-    <div>
-      <p className="text-xs font-black uppercase text-slate-400">{label}</p>
-      <p className="font-bold text-slate-700 dark:text-slate-200">{value}</p>
+    <nav
+      aria-label="Gardens pagination"
+      className="mt-6 flex flex-col items-center justify-between gap-3 sm:flex-row"
+    >
+      <p className="text-sm text-slate-500 dark:text-slate-400">
+        Showing <span className="font-semibold text-slate-700 dark:text-slate-200">{from}–{to}</span> of{" "}
+        <span className="font-semibold text-slate-700 dark:text-slate-200">{total}</span>
+      </p>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => onChange(page - 1)}
+          disabled={page === 1}
+          aria-label="Previous page"
+          className={`${buttonClass} border border-slate-200 text-slate-600 hover:bg-slate-100 dark:border-slate-800 dark:text-slate-300 dark:hover:bg-slate-800`}
+        >
+          <ChevronLeft size={16} />
+        </button>
+        {pageList(page, totalPages).map((item, index) =>
+          item === "…" ? (
+            <span key={`gap-${index}`} className="px-1 text-slate-400">
+              …
+            </span>
+          ) : (
+            <button
+              key={item}
+              type="button"
+              onClick={() => onChange(item)}
+              aria-label={`Page ${item}`}
+              aria-current={item === page ? "page" : undefined}
+              className={`${buttonClass} ${
+                item === page
+                  ? "bg-emerald-600 text-white"
+                  : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+              }`}
+            >
+              {item}
+            </button>
+          ),
+        )}
+        <button
+          type="button"
+          onClick={() => onChange(page + 1)}
+          disabled={page === totalPages}
+          aria-label="Next page"
+          className={`${buttonClass} border border-slate-200 text-slate-600 hover:bg-slate-100 dark:border-slate-800 dark:text-slate-300 dark:hover:bg-slate-800`}
+        >
+          <ChevronRight size={16} />
+        </button>
+      </div>
+    </nav>
+  );
+}
+
+function SummaryTile({
+  icon: Icon,
+  label,
+  value,
+  note,
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: React.ReactNode;
+  note?: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+        <Icon size={15} className="text-emerald-600 dark:text-emerald-400" />
+        {label}
+      </div>
+      <p className="mt-2 text-2xl font-black">{value}</p>
+      {note ? <p className="text-xs font-semibold text-sky-600 dark:text-sky-400">{note}</p> : null}
     </div>
   );
 }
 
-function formatCoordinate(value: number | null) {
-  return value == null ? "Not set" : value.toFixed(5);
+function deviceStatusSummary(devices: number, overview?: GardenOverview) {
+  if (devices === 0) return { dot: "bg-slate-300 dark:bg-slate-600", text: "No devices" };
+  if (!overview) return { dot: "bg-slate-300 dark:bg-slate-600", text: "Checking…" };
+  const { online, stale = 0, offline } = overview.deviceSummary;
+  // Devices that have never reported are not counted in any bucket.
+  const neverSeen = Math.max(0, devices - online - stale - offline);
+  if (online === devices) {
+    return { dot: "bg-emerald-500", text: devices === 1 ? "Online" : `All ${devices} online` };
+  }
+  const parts: string[] = [];
+  if (online) parts.push(`${online} online`);
+  if (offline) parts.push(`${offline} offline`);
+  if (stale) parts.push(`${stale} stale`);
+  if (neverSeen) parts.push(`${neverSeen} not connected`);
+  const dot = offline ? "bg-rose-500" : stale ? "bg-amber-500" : "bg-slate-400";
+  return { dot, text: parts.join(" · ") };
 }
 
-function formatDate(value: string) {
-  return new Date(value).toLocaleDateString();
+function GardenCard({
+  garden,
+  overview,
+  active,
+  onActivate,
+  onEdit,
+  onDelete,
+}: {
+  garden: Garden;
+  overview?: GardenOverview;
+  active: boolean;
+  onActivate: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const type = gardenType(garden.type);
+  const status = deviceStatusSummary(garden._count.devices, overview);
+  const pumpsOn = overview?.pumpsOn ?? 0;
+  const detailsHref = `/gardens/${garden.id}`;
+
+  return (
+    <article
+      className={`group/card relative flex flex-col rounded-2xl border bg-white shadow-sm transition hover:shadow-md dark:bg-slate-900 ${
+        active
+          ? "border-emerald-500/60 ring-1 ring-emerald-500/30 dark:border-emerald-500/50"
+          : "border-slate-200 hover:border-slate-300 dark:border-slate-800 dark:hover:border-slate-700"
+      }`}
+    >
+      <div className="flex items-start gap-3.5 p-5">
+        <span className={`grid h-12 w-12 shrink-0 place-items-center rounded-xl ${type.iconClass}`}>
+          <type.icon size={22} />
+        </span>
+        <div className="min-w-0 flex-1 pt-0.5">
+          <div className="flex items-center gap-2">
+            <Link
+              href={detailsHref}
+              className="truncate text-base font-bold text-slate-950 hover:text-emerald-600 dark:text-white dark:hover:text-emerald-400"
+              title={garden.name}
+            >
+              {garden.name}
+            </Link>
+            {active ? (
+              <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                Active
+              </span>
+            ) : (
+              <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                <span className="h-1.5 w-1.5 rounded-full bg-slate-400 dark:bg-slate-500" />
+                Inactive
+              </span>
+            )}
+          </div>
+          <p className="mt-1 flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
+            <MapPin size={12} className="shrink-0" />
+            <span className="truncate">{garden.location || "No location"}</span>
+            <span aria-hidden="true" className="text-slate-300 dark:text-slate-600">•</span>
+            <span className="shrink-0">{type.label}</span>
+          </p>
+        </div>
+        <GardenMenu
+          gardenName={garden.name}
+          detailsHref={detailsHref}
+          active={active}
+          onActivate={onActivate}
+          onEdit={onEdit}
+          onDelete={onDelete}
+        />
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-5 text-xs font-medium text-slate-600 dark:text-slate-300">
+        <span className="inline-flex items-center gap-1.5">
+          <span aria-hidden="true" className={`h-2 w-2 rounded-full ${status.dot}`} />
+          {status.text}
+        </span>
+        {pumpsOn > 0 ? (
+          <span className="inline-flex items-center gap-1 text-sky-600 dark:text-sky-400">
+            <Droplets size={13} />
+            {pumpsOn} pump{pumpsOn > 1 ? "s" : ""} running
+          </span>
+        ) : null}
+      </div>
+
+      <dl className="mx-5 mt-4 grid grid-cols-3 gap-2">
+        <CardStat icon={Package} label="Pots" value={garden._count.pots} />
+        <CardStat icon={Flower2} label="Plants" value={garden._count.plants} />
+        <CardStat icon={Cpu} label="Devices" value={garden._count.devices} />
+      </dl>
+
+      <div className="mt-4 flex items-center justify-between gap-3 border-t border-slate-100 px-5 py-3 dark:border-slate-800">
+        <span className="truncate text-xs text-slate-400" title="Latitude, longitude">
+          {garden.lat != null && garden.lng != null
+            ? `${garden.lat.toFixed(3)}, ${garden.lng.toFixed(3)}`
+            : "No coordinates"}
+        </span>
+        <Link
+          href={detailsHref}
+          className="-mr-2 inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-sm font-semibold text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-500/10"
+        >
+          View
+          <ArrowRight size={15} className="transition-transform group-hover/card:translate-x-0.5" />
+        </Link>
+      </div>
+    </article>
+  );
+}
+
+function CardStat({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value: number }) {
+  return (
+    <div className="rounded-xl bg-slate-50 px-3 py-2.5 dark:bg-slate-950/60">
+      <dt className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+        <Icon size={12} />
+        {label}
+      </dt>
+      <dd className="mt-1 text-lg font-bold leading-none text-slate-900 dark:text-white">{value}</dd>
+    </div>
+  );
+}
+
+function GardenMenu({
+  gardenName,
+  detailsHref,
+  active,
+  onActivate,
+  onEdit,
+  onDelete,
+}: {
+  gardenName: string;
+  detailsHref: string;
+  active: boolean;
+  onActivate: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  useDismiss(open, close, rootRef, triggerRef);
+
+  function run(action: () => void) {
+    setOpen(false);
+    action();
+  }
+
+  const itemClass =
+    "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-100 focus-visible:bg-slate-100 focus-visible:outline-none dark:text-slate-200 dark:hover:bg-slate-800 dark:focus-visible:bg-slate-800";
+
+  return (
+    <div ref={rootRef} className="relative -mr-2 -mt-1">
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-label={`Actions for ${gardenName}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className={`grid h-9 w-9 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 dark:hover:bg-slate-800 dark:hover:text-slate-200 ${
+          open ? "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200" : ""
+        }`}
+      >
+        <EllipsisVertical size={18} />
+      </button>
+      {open ? (
+        <div
+          role="menu"
+          className="animate-fade-in absolute right-0 top-full z-30 mt-1 w-48 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl shadow-slate-950/10 dark:border-slate-800 dark:bg-slate-900 dark:shadow-black/40"
+        >
+          <Link role="menuitem" href={detailsHref} onClick={() => setOpen(false)} className={itemClass}>
+            <Eye size={16} className="text-slate-400" />
+            View details
+          </Link>
+          <button role="menuitem" type="button" onClick={() => run(onEdit)} className={itemClass}>
+            <Pencil size={16} className="text-slate-400" />
+            Edit
+          </button>
+          {active ? (
+            <div role="menuitem" aria-disabled="true" className={`${itemClass} cursor-default text-emerald-600 hover:bg-transparent dark:text-emerald-400 dark:hover:bg-transparent`}>
+              <CircleCheck size={16} />
+              Active garden
+            </div>
+          ) : (
+            <button role="menuitem" type="button" onClick={() => run(onActivate)} className={itemClass}>
+              <CircleCheck size={16} className="text-slate-400" />
+              Set as active
+            </button>
+          )}
+          <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
+          <button
+            role="menuitem"
+            type="button"
+            onClick={() => run(onDelete)}
+            className={`${itemClass} text-rose-600 hover:bg-rose-50 focus-visible:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-500/10 dark:focus-visible:bg-rose-500/10`}
+          >
+            <Trash2 size={16} />
+            Delete
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
 }

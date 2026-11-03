@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
 import { prisma } from "@/lib/db";
-import { buildGardenAlerts } from "@/lib/garden-alerts";
+import { applyAlertResolutions, buildGardenAlerts } from "@/lib/garden-alerts";
 import { getGardenWeather, type WeatherResult } from "@/lib/weather";
 import { persistGardenWeatherSnapshot } from "@/lib/weather-history";
 import { getDeviceConnectionStatus } from "@/lib/device-status";
@@ -21,8 +21,14 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const garden = await prisma.garden.findFirst({
     where: { id, userId: gate },
     include: {
-      devices: { select: { id: true, name: true, type: true, status: true, lastSeenAt: true }, orderBy: { createdAt: "desc" } },
-      pots: { include: { plant: { select: { id: true, commonName: true, healthStatus: true } } }, orderBy: { label: "asc" } },
+      devices: { select: { id: true, name: true, type: true, hardwareId: true, status: true, lastSeenAt: true }, orderBy: { createdAt: "desc" } },
+      pots: {
+        include: {
+          plant: { select: { id: true, commonName: true, healthStatus: true } },
+          deviceMappings: { select: { device: { select: { id: true, name: true, lastSeenAt: true } } }, orderBy: { createdAt: "asc" } },
+        },
+        orderBy: { label: "asc" },
+      },
     },
   });
   if (!garden) return NextResponse.json({ error: "Garden not found" }, { status: 404 });
@@ -53,16 +59,21 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   if (garden.lat != null && garden.lng != null) {
     try { weather = await getGardenWeather({ id: garden.id, lat: garden.lat, lng: garden.lng }); if (weather) await persistGardenWeatherSnapshot(garden.id, weather); } catch { weatherUnavailable = true; }
   }
+  const now = new Date();
   const pots = garden.pots.map((pot) => {
     const moistureHistory = moistureByPot.get(pot.id) ?? [];
     const irrigationDecision = decisionHistory.find((event) => event.potId === pot.id) ?? null;
-    return { id: pot.id, label: pot.label, irrigationMode: pot.irrigationMode, pumpState: pot.pumpState, moistureOnThreshold: pot.moistureOnThreshold, plant: pot.plant, currentMoisture: moistureHistory.at(-1)?.value ?? null, moistureHistory, irrigationDecision };
+    const sensors = pot.deviceMappings.map(({ device }) => ({ id: device.id, name: device.name, status: getDeviceConnectionStatus(device.lastSeenAt, now), lastSeenAt: device.lastSeenAt }));
+    return { id: pot.id, label: pot.label, irrigationMode: pot.irrigationMode, pumpState: pot.pumpState, moistureOnThreshold: pot.moistureOnThreshold, moistureOffThreshold: pot.moistureOffThreshold, soilType: pot.soilType, plant: pot.plant, currentMoisture: moistureHistory.at(-1)?.value ?? null, moistureRecordedAt: moistureHistory.at(-1)?.recordedAt ?? null, moistureHistory, irrigationDecision, sensors };
   });
-  const now = new Date();
   const devices = garden.devices.map((device) => ({ ...device, status: getDeviceConnectionStatus(device.lastSeenAt, now) }));
-  const alerts = buildGardenAlerts({ gardenId: garden.id, pots: pots.map((pot) => ({ id: pot.id, label: pot.label, plant: pot.plant, moisture: pot.currentMoisture, moistureOnThreshold: pot.moistureOnThreshold })), devices, weather, latestPredictions, failedCommands });
+  const activeAlerts = buildGardenAlerts({ gardenId: garden.id, pots: pots.map((pot) => ({ id: pot.id, label: pot.label, plant: pot.plant, moisture: pot.currentMoisture, moistureOnThreshold: pot.moistureOnThreshold })), devices, weather, latestPredictions, failedCommands });
+  const resolutions = await prisma.alertResolution.findMany({ where: { userId: gate, gardenId: id }, select: { alertKey: true, resolvedAt: true } });
+  const { alerts, resolved: resolvedAlertList, resolvedCount, stale } = applyAlertResolutions(activeAlerts, resolutions);
+  // The condition behind these has cleared; forget the resolution so a recurrence alerts again.
+  if (stale.length) await prisma.alertResolution.deleteMany({ where: { gardenId: id, alertKey: { in: stale } } });
   return NextResponse.json({
     garden: { id: garden.id, name: garden.name, location: garden.location, lat: garden.lat, lng: garden.lng, type: garden.type },
-    weather, weatherUnavailable, devices, pots, pumpHistory, diseaseHistory: predictions, alerts,
+    weather, weatherUnavailable, devices, pots, pumpHistory, diseaseHistory: predictions, alerts, resolvedAlerts: resolvedCount, resolvedAlertList,
   });
 }

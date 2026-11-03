@@ -81,7 +81,7 @@ USE_EFFICIENTNET_PREPROCESS = os.getenv(
     "1" if "efficientnet" in MODEL_PATH.name.lower() else "0",
 ) == "1"
 
-app = FastAPI(title="SmartAgriAI Plant Disease Detection", version="1.0.0")
+app = FastAPI(title="SmartAgri Plant Disease Detection", version="1.0.0")
 model = None
 labels: list[str] = []
 

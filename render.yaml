@@ -1,4 +1,4 @@
-# Attach the existing SmartAgriAI web service and this cron service to the same
+# Attach the existing SmartAgri web service and this cron service to the same
 # Render environment group (or configure the listed variables on both).
 # Secrets are deliberately not stored in this file.
 services:

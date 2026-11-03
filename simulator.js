@@ -1,5 +1,5 @@
 /**
- * SmartAgriAI ESP32 IoT Node Simulator
+ * SmartAgri ESP32 IoT Node Simulator
  *
  * Acts as a software ESP32 for Phase 5:
  * - sends garden-level temperature and humidity
@@ -53,7 +53,7 @@ let temperature = 28.5;
 let humidity = 65;
 
 console.log("----------------------------------------------------");
-console.log(`SmartAgriAI ESP32 Simulator started [Device hardwareId: ${DEVICE_ID}]`);
+console.log(`SmartAgri ESP32 Simulator started [Device hardwareId: ${DEVICE_ID}]`);
 console.log(`Mapped Pots: ${POT_IDS.join(", ")}`);
 console.log(`Posting to: ${BACKEND_URL}/api/iot/ingest`);
 console.log(`Polling:    ${BACKEND_URL}/api/iot/commands`);

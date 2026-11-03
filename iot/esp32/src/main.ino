@@ -1,5 +1,5 @@
 /*
- * SmartAgriAI ESP32 node
+ * SmartAgri ESP32 node
  *
  * Sends one pot's soil moisture to /api/iot/ingest. Pump commands are fetched from
  * /api/iot/commands and acknowledged only after the relay has been changed.
@@ -199,6 +199,14 @@ void setup() {
   pinMode(RELAY_PIN, OUTPUT);
   setPump(false); // Always establish the configured OFF state before Wi-Fi.
   commandStore.begin("pumpcmd", false);
+  // Command sequences are numbered per pot on the server. If this board was
+  // previously configured for a different pot (or another install), forget the
+  // old high-water mark; otherwise every new command is rejected as stale.
+  if (commandStore.getString("potId", "") != POT_ID) {
+    commandStore.clear();
+    commandStore.putString("potId", POT_ID);
+    Serial.println("Command history reset for this pot");
+  }
   connectWiFi();
   lastServerCommunicationAt = millis();
 }

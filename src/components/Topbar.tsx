@@ -1,17 +1,12 @@
 "use client";
 
-import { signOut } from "next-auth/react";
-import { Menu, Moon, Sun, X } from "lucide-react";
+import { Menu, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { NotificationsMenu, UserMenu } from "@/components/HeaderMenus";
 import { Sidebar } from "@/components/Sidebar";
 
-export function Topbar({ email }: { email: string }) {
-  const [dark, setDark] = useState(() =>
-    typeof document !== "undefined"
-      ? document.documentElement.classList.contains("dark")
-      : false,
-  );
+export function Topbar({ email, userName = null }: { email: string; userName?: string | null }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -59,16 +54,9 @@ export function Topbar({ email }: { email: string }) {
     wasMobileMenuOpen.current = mobileMenuOpen;
   }, [mobileMenuOpen]);
 
-  function toggleTheme() {
-    const next = !dark;
-    setDark(next);
-    document.documentElement.classList.toggle("dark", next);
-    localStorage.setItem("theme", next ? "dark" : "light");
-  }
-
   return (
     <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-slate-200 bg-white/90 px-4 backdrop-blur dark:border-slate-800 dark:bg-slate-950/90 sm:px-6 lg:px-8">
-      <div className="min-w-0 text-sm font-bold text-slate-500 dark:text-slate-400">
+      <div className="flex min-w-0 items-center text-sm font-bold text-slate-500 dark:text-slate-400">
         <button
           ref={menuButtonRef}
           type="button"
@@ -80,31 +68,11 @@ export function Topbar({ email }: { email: string }) {
         >
           <Menu size={20} aria-hidden="true" />
         </button>
-        <span className="max-[375px]:hidden">Precision growing workspace</span>
       </div>
-      <div className="flex items-center gap-3">
-        <button
-          onClick={toggleTheme}
-          aria-label="Toggle theme"
-          className="rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-slate-50 dark:border-slate-800 dark:text-slate-300 dark:hover:bg-slate-900"
-        >
-          {dark ? <Sun size={16} /> : <Moon size={16} />}
-        </button>
-        <div className="hidden text-right sm:block">
-          <p className="text-sm font-black">{email.split("@")[0]}</p>
-          <p className="text-xs text-slate-500 dark:text-slate-400">
-            Farm Operator
-          </p>
-        </div>
-        <div className="grid h-10 w-10 place-items-center rounded-lg bg-emerald-600 text-sm font-black text-white">
-          {email.substring(0, 2).toUpperCase()}
-        </div>
-        <button
-          onClick={() => signOut({ callbackUrl: "/login" })}
-          className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold text-rose-600 hover:bg-rose-50 dark:border-slate-800 dark:hover:bg-rose-950/20"
-        >
-          Logout
-        </button>
+      <div className="flex items-center gap-2">
+        <NotificationsMenu />
+        <span aria-hidden="true" className="h-6 w-px bg-slate-200 dark:bg-slate-800" />
+        <UserMenu email={email} userName={userName} />
       </div>
       {mobileMenuOpen
         ? createPortal(

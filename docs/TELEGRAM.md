@@ -1,6 +1,6 @@
 # Telegram transport
 
-SmartAgriAI's server-side Telegram transport reads these Vercel environment variables:
+SmartAgri's server-side Telegram transport reads these Vercel environment variables:
 
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
@@ -9,7 +9,7 @@ Set both in the Vercel project’s Production environment, then redeploy. They m
 
 ## Secure delivery check
 
-`POST /api/telegram/test` sends a fixed timestamped test message to the server-configured chat. It accepts no request body, chat ID, token, or message content and requires an authenticated SmartAgriAI session. The current schema has no administrator role, so the route cannot safely impose an additional role restriction without inventing one.
+`POST /api/telegram/test` sends a fixed timestamped test message to the server-configured chat. It accepts no request body, chat ID, token, or message content and requires an authenticated SmartAgri session. The current schema has no administrator role, so the route cannot safely impose an additional role restriction without inventing one.
 
 Use an authenticated browser session or an authenticated same-origin request to call it once after deployment. A successful response is `{ "success": true }`; failures intentionally return no provider details.
 
@@ -25,14 +25,14 @@ There is intentionally no new in-app `Notification` row: it is a separate read/u
 
 ## Device monitoring and global categories (Phase 5)
 
-The same scheduled worker also checks devices independently of dashboard visits. `lastSeenAt` means the time SmartAgriAI successfully received valid authenticated telemetry; it does not prove relay, sensor, or physical-device health. `DEVICE_OFFLINE_THRESHOLD_SECONDS` must be configured for the deployed telemetry interval (the documented 900-second fallback is conservative for a roughly 60-second heartbeat). An ONLINE → OFFLINE transition creates one durable delivery keyed by that device and its last successful receipt. A valid ingestion from OFFLINE → ONLINE creates one recovery delivery. Conditional database updates make both transitions safe when schedulers or ingestions overlap.
+The same scheduled worker also checks devices independently of dashboard visits. `lastSeenAt` means the time SmartAgri successfully received valid authenticated telemetry; it does not prove relay, sensor, or physical-device health. `DEVICE_OFFLINE_THRESHOLD_SECONDS` must be configured for the deployed telemetry interval (the documented 900-second fallback is conservative for a roughly 60-second heartbeat). An ONLINE → OFFLINE transition creates one durable delivery keyed by that device and its last successful receipt. A valid ingestion from OFFLINE → ONLINE creates one recovery delivery. Conditional database updates make both transitions safe when schedulers or ingestions overlap.
 
 Telegram routing remains one server-configured project destination. Category controls are therefore global environment variables, not per-user settings: `TELEGRAM_NOTIFY_PUMP_ACKNOWLEDGED`, `TELEGRAM_NOTIFY_PUMP_FAILED`, `TELEGRAM_NOTIFY_DISEASE_ANALYSIS`, `TELEGRAM_NOTIFY_DEVICE_OFFLINE`, and `TELEGRAM_NOTIFY_DEVICE_RECOVERED`. Each defaults enabled and is disabled only by the explicit value `false`. Low-moisture decision alerts and daily summaries remain deferred: no deduplicated producer or timezone preference exists yet.
 
 Manual production test:
 1. In Vercel, set Production TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.
 2. Redeploy after changing either variable.
-3. Sign in to SmartAgriAI.
+3. Sign in to SmartAgri.
 4. From the authenticated site’s browser console, run:
 fetch("/api/telegram/test", { method: "POST" }).then((r) => r.json())
 5. Confirm { success: true } and the fixed test message in the configured chat.

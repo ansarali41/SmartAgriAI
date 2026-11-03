@@ -195,6 +195,7 @@ model User {
   deviceCommands   DeviceCommand[]
   pumpEvents       PumpEvent[]
   telegramDeliveries TelegramDelivery[]
+  alertResolutions AlertResolution[]
 }
 
 model Garden {
@@ -220,9 +221,27 @@ model Garden {
   weatherSnapshots WeatherSnapshot[]
   pumpEvents       PumpEvent[]
   diseasePredictions DiseasePrediction[]
+  alertResolutions AlertResolution[]
 
   @@unique([userId, name])
   @@index([userId, status])
+}
+
+// A user's "mark resolved" on a computed garden alert (see lib/garden-alerts).
+// Rows are removed automatically once the alert's condition clears, so the
+// same problem alerts again if it comes back.
+model AlertResolution {
+  id         String   @id @default(cuid())
+  userId     String
+  gardenId   String
+  alertKey   String
+  resolvedAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  garden Garden @relation(fields: [gardenId], references: [id], onDelete: Cascade)
+
+  @@unique([gardenId, alertKey])
+  @@index([userId])
 }
 
 model Pot {

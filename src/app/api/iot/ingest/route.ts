@@ -12,6 +12,7 @@ import { decidePotIrrigation } from "@/lib/irrigation";
 import { formatDeviceRecoveredNotification } from "@/lib/business-notifications";
 import { enqueueTelegramDelivery } from "@/lib/telegram-delivery-enqueue";
 import { deviceRecoveryEventKey } from "@/lib/device-monitoring";
+import { pickPotForReading } from "@/lib/device-pot";
 import type { Metric, Prisma } from "@prisma/client";
 
 const metricObjectSchema = z
@@ -114,17 +115,27 @@ async function resolvePotId(
     return pot.id;
   }
 
-  const pots = await prisma.pot.findMany({
-    where: { userId: device.userId, gardenId: device.gardenId, status: "active" },
-    select: { id: true },
-    take: 2,
+  const [mappings, pots] = await Promise.all([
+    prisma.devicePotMapping.findMany({
+      where: { deviceId: device.id, pot: { userId: device.userId, gardenId: device.gardenId } },
+      select: { potId: true },
+      take: 2,
+    }),
+    prisma.pot.findMany({
+      where: { userId: device.userId, gardenId: device.gardenId, status: "active" },
+      select: { id: true },
+      take: 2,
+    }),
+  ]);
+  const potId = pickPotForReading({
+    mappedPotIds: mappings.map((mapping) => mapping.potId),
+    gardenPotIds: pots.map((pot) => pot.id),
   });
-
-  if (pots.length === 1) {
-    await prisma.devicePotMapping.upsert({ where: { deviceId_potId: { deviceId: device.id, potId: pots[0].id } }, update: {}, create: { deviceId: device.id, potId: pots[0].id } });
-    return pots[0].id;
+  if (potId) {
+    await prisma.devicePotMapping.upsert({ where: { deviceId_potId: { deviceId: device.id, potId } }, update: {}, create: { deviceId: device.id, potId } });
+    return potId;
   }
-  throw new Error("potId is required for soil moisture readings");
+  throw new Error("potId is required for soil moisture readings: connect this device to one pot or send potId");
 }
 
 async function getPotIrrigationConfig(

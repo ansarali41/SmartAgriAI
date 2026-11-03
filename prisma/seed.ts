@@ -23,7 +23,7 @@ const DEMO_HARDWARE_ID = "ESP32-GARDEN-01";
 const DEMO_HARDWARE_ID_2 = "ESP32-GARDEN-02";
 
 async function main() {
-  console.log("Seeding SmartAgriAI demo data…");
+  console.log("Seeding SmartAgri demo data…");
 
   const { passwordHash, passwordSalt } = hashPassword(DEMO_PASSWORD);
 
@@ -178,7 +178,7 @@ async function main() {
       userId: user.id,
       type: "info",
       severity: "low",
-      title: "Welcome to SmartAgriAI",
+      title: "Welcome to SmartAgri",
       message: "Your demo farm is ready. Connect an ESP32 or run the simulator to see live data.",
     },
   });

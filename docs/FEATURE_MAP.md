@@ -1,4 +1,4 @@
-# SmartAgriAI — Feature → Code Map
+# SmartAgri — Feature → Code Map
 
 "Where is each task done?" Every file carries a `// TASK:` / `// PAGE:` header
 comment; this table is the index. Paths are under `src/` unless noted.

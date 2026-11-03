@@ -1,4 +1,4 @@
-# SmartAgriAI — Run & Test Guide
+# SmartAgri — Run & Test Guide
 
 A step-by-step guide to running the project locally and testing every one of the
 six proposal features (both through the **UI** and via **API/curl**).

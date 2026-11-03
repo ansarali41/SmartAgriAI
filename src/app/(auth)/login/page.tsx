@@ -13,7 +13,7 @@ export default async function LoginPage() {
         <div className="mb-8 text-center">
           <div className="mb-3 inline-flex items-center gap-2 text-2xl font-black text-slate-950 dark:text-white">
             <span className="rounded-xl bg-emerald-600 p-2 text-white">🌱</span>
-            SmartAgriAI
+            SmartAgri
           </div>
           <p className="text-sm font-medium text-slate-500 dark:text-slate-400">
             Sign in to your precision farming workspace

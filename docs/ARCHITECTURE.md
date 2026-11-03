@@ -1,4 +1,4 @@
-# SmartAgriAI — Architecture & Merge Mapping
+# SmartAgri — Architecture & Merge Mapping
 
 ## Why this exists
 

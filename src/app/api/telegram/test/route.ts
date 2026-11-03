@@ -9,7 +9,7 @@ export async function POST() {
 
   const { sendTelegramText } = await import("@/lib/telegram");
   const result = await sendTelegramText(
-    `SmartAgriAI Telegram test message sent at ${new Date().toISOString()}.`,
+    `SmartAgri Telegram test message sent at ${new Date().toISOString()}.`,
   );
 
   if (!result.ok) {

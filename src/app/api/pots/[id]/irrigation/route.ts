@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireUser } from "@/lib/api-auth";
 import { prisma } from "@/lib/db";
-import { findGardenDevice, pumpStateToCommand, queuePumpCommand } from "@/lib/device-commands";
+import { findPotDevice, pumpStateToCommand, queuePumpCommand } from "@/lib/device-commands";
 import { decidePotIrrigation, validatePotIrrigationThresholds } from "@/lib/irrigation";
 
 const FRESH_MOISTURE_WINDOW_MS = 10 * 60 * 1000;
@@ -131,7 +131,7 @@ export async function PATCH(
       if (!decision.changed) {
         autoDecision = { state: "no-change", message: decision.message };
       } else {
-        const device = await findGardenDevice(updated.gardenId, gate);
+        const device = await findPotDevice(updated.id, updated.gardenId, gate);
         const isOnline =
           device?.status === "ONLINE" &&
           device.lastSeenAt != null &&

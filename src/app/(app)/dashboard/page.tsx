@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import useSWR from "swr";
-import { GardenDashboard } from "@/app/(app)/gardens/[id]/page";
+import { GardenDashboard } from "@/components/GardenDashboard";
 import { Card, PageHeader } from "@/components/ui";
 import { getSelectedGardenId, setSelectedGardenId } from "@/lib/selected-garden";
 

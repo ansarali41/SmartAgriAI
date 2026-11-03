@@ -3,8 +3,8 @@
 // protected page in the sidebar + topbar.
 import { redirect } from "next/navigation";
 import { auth } from "@/auth";
-import { Sidebar } from "@/components/Sidebar";
-import { Topbar } from "@/components/Topbar";
+import { prisma } from "@/lib/db";
+import { AppShell } from "@/components/AppShell";
 
 export default async function AppLayout({
   children,
@@ -15,16 +15,15 @@ export default async function AppLayout({
   if (!session?.user) redirect("/login");
 
   const email = session.user.email ?? "farmer@smartagri.ai";
+  const profile = session.user.id
+    ? await prisma.user.findUnique({ where: { id: session.user.id }, select: { email: true, userName: true } })
+    : null;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-950 dark:bg-slate-950 dark:text-white">
-      <div className="hidden md:fixed md:inset-y-0 md:flex md:w-72 md:flex-col">
-        <Sidebar />
-      </div>
-      <div className="md:pl-72">
-        <Topbar email={email} />
-        <main className="px-4 py-6 sm:px-6 lg:px-8">{children}</main>
-      </div>
+      <AppShell email={profile?.email ?? email} userName={profile?.userName ?? null}>
+        {children}
+      </AppShell>
     </div>
   );
 }

@@ -7,8 +7,26 @@ import { enqueueTelegramDelivery } from "@/lib/telegram-delivery-enqueue";
 export const pumpStateToCommand = (state: IrrigationStatus): DeviceCommandType => state === "on" ? "PUMP_ON" : "PUMP_OFF";
 export const commandToPumpState = (command: DeviceCommandType): IrrigationStatus => command === "PUMP_ON" ? "on" : "off";
 
+const DEVICE_SELECT = { id: true, gardenId: true, userId: true, hardwareId: true, status: true, lastSeenAt: true } as const;
+// Postgres sorts NULL first for DESC; a never-seen device must not win.
+const RECENTLY_SEEN_FIRST = [{ lastSeenAt: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }] as const;
+
 export async function findGardenDevice(gardenId: string, userId: string) {
-  return prisma.device.findFirst({ where: { gardenId, userId, type: "esp32_node" }, orderBy: [{ lastSeenAt: "desc" }, { createdAt: "desc" }], select: { id: true, gardenId: true, userId: true, hardwareId: true, status: true, lastSeenAt: true } });
+  return prisma.device.findFirst({ where: { gardenId, userId, type: "esp32_node" }, orderBy: [...RECENTLY_SEEN_FIRST], select: DEVICE_SELECT });
+}
+
+/**
+ * The device that should receive a pot's pump commands: the one connected to
+ * the pot (DevicePotMapping), most recently seen first. Falls back to the
+ * garden's ESP32 only when no device is connected to the pot.
+ */
+export async function findPotDevice(potId: string, gardenId: string, userId: string) {
+  const connected = await prisma.device.findFirst({
+    where: { gardenId, userId, potMappings: { some: { potId } } },
+    orderBy: [...RECENTLY_SEEN_FIRST],
+    select: DEVICE_SELECT,
+  });
+  return connected ?? findGardenDevice(gardenId, userId);
 }
 
 export async function queuePumpCommand(input: { userId: string; gardenId: string; deviceId: string; potId: string; command: DeviceCommandType; mode: PotIrrigationMode; decisionMoisture?: number; onThreshold?: number; offThreshold?: number }) {

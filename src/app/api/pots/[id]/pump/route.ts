@@ -4,7 +4,7 @@ import { z } from "zod";
 import { requireUser } from "@/lib/api-auth";
 import {
   commandToPumpState,
-  findGardenDevice,
+  findPotDevice,
   pumpStateToCommand,
   queuePumpCommand,
 } from "@/lib/device-commands";
@@ -67,7 +67,7 @@ export async function POST(
     );
   }
 
-  const device = await findGardenDevice(pot.gardenId, gate);
+  const device = await findPotDevice(pot.id, pot.gardenId, gate);
   if (!device) {
     return NextResponse.json(
       { error: "No ESP32 device associated with this pot's garden" },

@@ -13,7 +13,7 @@ type AlertInput = {
   pots: { id: string; label: string; plant: { id: string; commonName: string } | null; moisture: number | null; moistureOnThreshold: number }[];
   devices: { id: string; name: string; status: string }[];
   weather: { current: { rain: number; rainProb: number } } | null;
-  latestPredictions: { potId: string; plantId: string; predictedDisease: string; className: string | null }[];
+  latestPredictions: { id?: string; potId: string; plantId: string; predictedDisease: string; className: string | null }[];
   failedCommands: { id: string; potId: string; error: string | null }[];
 };
 
@@ -38,10 +38,38 @@ export function buildGardenAlerts(input: AlertInput): GardenAlert[] {
   }
   for (const prediction of input.latestPredictions) {
     const healthy = (prediction.className ?? prediction.predictedDisease).toLowerCase().includes("healthy");
-    if (!healthy) alerts.push({ id: `disease-${prediction.potId}`, severity: "warning", title: "Disease detected", message: prediction.predictedDisease, gardenId: input.gardenId, potId: prediction.potId, plantId: prediction.plantId });
+    // Keyed by prediction so resolving one diagnosis doesn't hide a later one.
+    const id = prediction.id ? `disease-${prediction.potId}-${prediction.id}` : `disease-${prediction.potId}`;
+    if (!healthy) alerts.push({ id, severity: "warning", title: "Disease detected", message: prediction.predictedDisease, gardenId: input.gardenId, potId: prediction.potId, plantId: prediction.plantId });
   }
   for (const command of input.failedCommands) {
     alerts.push({ id: `pump-failed-${command.id}`, severity: "critical", title: "Pump command failed", message: command.error ?? "The device reported a failed pump command.", gardenId: input.gardenId, potId: command.potId });
   }
   return alerts;
+}
+
+/**
+ * Hide alerts the user marked resolved. Resolutions whose alert is no longer
+ * active are returned as `stale` so the caller can delete them — that way the
+ * same alert shows again if its condition comes back later.
+ */
+export function applyAlertResolutions(
+  alerts: GardenAlert[],
+  resolutions: Iterable<string | { alertKey: string; resolvedAt: Date }>,
+) {
+  const resolvedAt = new Map<string, Date | null>();
+  for (const entry of resolutions) {
+    if (typeof entry === "string") resolvedAt.set(entry, null);
+    else resolvedAt.set(entry.alertKey, entry.resolvedAt);
+  }
+  const activeIds = new Set(alerts.map((alert) => alert.id));
+  const resolved = alerts
+    .filter((alert) => resolvedAt.has(alert.id))
+    .map((alert) => ({ ...alert, resolvedAt: resolvedAt.get(alert.id) ?? null }));
+  return {
+    alerts: alerts.filter((alert) => !resolvedAt.has(alert.id)),
+    resolved,
+    resolvedCount: resolved.length,
+    stale: [...resolvedAt.keys()].filter((key) => !activeIds.has(key)),
+  };
 }
