@@ -16,8 +16,8 @@ export async function GET(req: Request) {
   const gardenId = searchParams.get("gardenId") || undefined;
   const devices = await prisma.device.findMany({
     where: {
+      userId: gate,
       ...(gardenId ? { gardenId } : {}),
-      garden: { userId: gate },
     },
     orderBy: { createdAt: "desc" },
     include: {

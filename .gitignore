@@ -43,5 +43,6 @@ next-env.d.ts
 # private leaf-image uploads (referenced from the database)
 /.data/
 
-# Local ESP32 credentials. Copy iot/esp32/src/secrets.example.h to secrets.h.
+# Local ESP32 settings. Copy iot/esp32/src/config.example.h to config.h.
+/iot/esp32/src/config.h
 /iot/esp32/src/secrets.h

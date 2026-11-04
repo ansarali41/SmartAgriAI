@@ -2,8 +2,9 @@
 
 // PAGE: Sensors & devices across all gardens — status at a glance, search and
 // filters, and registering an ESP32/sensor (its one-time key is shown once).
-import { useCallback, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import {
   Check,
@@ -27,8 +28,9 @@ import { SlideOver } from "@/components/SlideOver";
 import { DeviceKey } from "@/components/GardenSetupPanels";
 import { useDismiss } from "@/components/HeaderMenus";
 import { GardenPicker } from "@/components/GardenPicker";
+import { AddDeviceGuide } from "@/components/AddDeviceGuide";
 import { DEVICE_TYPE_LABELS, deviceStatus, timeAgo } from "@/components/device-ui";
-import { apiDelete, apiPost } from "@/lib/api-client";
+import { apiDelete, apiPatch, apiPost } from "@/lib/api-client";
 
 interface Garden {
   id: string;
@@ -40,10 +42,10 @@ interface Device {
   name: string;
   hardwareId: string;
   type: string;
-  gardenId: string;
+  gardenId: string | null;
   status: "NEVER_SEEN" | "ONLINE" | "STALE" | "OFFLINE";
   lastSeenAt: string | null;
-  garden: { name: string };
+  garden: { name: string } | null;
   pots: { id: string; label: string }[];
 }
 
@@ -58,13 +60,30 @@ function bucket(status: Device["status"]): Exclude<StatusFilter, "all"> {
   return "attention";
 }
 
+// ?claim=<hardwareId>&code=<pairingCode> (the board's setup-page link) opens
+// the Add device guide pre-filled; reading search params needs Suspense.
 export default function SensorsPage() {
+  return (
+    <Suspense fallback={null}>
+      <SensorsContent />
+    </Suspense>
+  );
+}
+
+function SensorsContent() {
+  const searchParams = useSearchParams();
+  const linkedBoard = searchParams.get("claim");
+  const linkedCode = searchParams.get("code");
   const { data: gardens } = useSWR<Garden[]>("/api/gardens");
   const { data: devices, mutate } = useSWR<Device[]>("/api/devices", { refreshInterval: 10000 });
   const [query, setQuery] = useState("");
   const [gardenFilter, setGardenFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [registering, setRegistering] = useState(false);
+  const [assigning, setAssigning] = useState<Device | null>(null);
+  const [guide, setGuide] = useState<{ hardwareId: string | null; code: string | null } | null>(() =>
+    linkedBoard ? { hardwareId: linkedBoard, code: linkedCode } : null,
+  );
 
   const counts = useMemo(() => {
     const all = devices ?? [];
@@ -82,7 +101,7 @@ export default function SensorsPage() {
       if (gardenFilter !== "all" && device.gardenId !== gardenFilter) return false;
       if (statusFilter !== "all" && bucket(device.status) !== statusFilter) return false;
       if (!needle) return true;
-      return [device.name, device.hardwareId, device.garden.name, ...device.pots.map((pot) => pot.label)].some((field) =>
+      return [device.name, device.hardwareId, device.garden?.name ?? "", ...device.pots.map((pot) => pot.label)].some((field) =>
         field.toLowerCase().includes(needle),
       );
     });
@@ -108,14 +127,16 @@ export default function SensorsPage() {
         action={
           <button
             type="button"
-            onClick={() => setRegistering(true)}
+            onClick={() => setGuide({ hardwareId: null, code: null })}
             className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-emerald-700"
           >
             <Plus size={16} />
-            Register device
+            Add device
           </button>
         }
       />
+
+      <NewDevicesFound onSetUp={(hardwareId) => setGuide({ hardwareId, code: null })} />
 
       <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Tile icon={Cpu} label="Devices" value={counts.total} active={statusFilter === "all"} onClick={() => setStatusFilter("all")} />
@@ -197,7 +218,7 @@ export default function SensorsPage() {
           </p>
           <button
             type="button"
-            onClick={() => setRegistering(true)}
+            onClick={() => setGuide({ hardwareId: null, code: null })}
             className="mt-5 inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-700"
           >
             <Plus size={16} />
@@ -209,10 +230,33 @@ export default function SensorsPage() {
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {visible.map((device) => (
-            <DeviceCard key={device.id} device={device} onDelete={() => remove(device)} />
+            <DeviceCard key={device.id} device={device} onDelete={() => remove(device)} onAssign={() => setAssigning(device)} />
           ))}
         </div>
       )}
+
+      <AddDeviceGuide
+        open={guide !== null}
+        onClose={() => setGuide(null)}
+        gardens={gardens ?? []}
+        initialHardwareId={guide?.hardwareId}
+        initialCode={guide?.code}
+        onDone={() => mutate()}
+        onManual={() => {
+          setGuide(null);
+          setRegistering(true);
+        }}
+      />
+
+      <AssignPanel
+        device={assigning}
+        gardens={gardens ?? []}
+        onClose={() => setAssigning(null)}
+        onSaved={() => {
+          setAssigning(null);
+          mutate();
+        }}
+      />
 
       <RegisterPanel
         open={registering}
@@ -267,7 +311,7 @@ function Tile({
   );
 }
 
-function DeviceCard({ device, onDelete }: { device: Device; onDelete: () => void }) {
+function DeviceCard({ device, onDelete, onAssign }: { device: Device; onDelete: () => void; onAssign: () => void }) {
   const status = deviceStatus(device.status);
   const [copied, setCopied] = useState(false);
 
@@ -295,14 +339,20 @@ function DeviceCard({ device, onDelete }: { device: Device; onDelete: () => void
           </p>
         </div>
         <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-bold ${status.pill}`}>{status.label}</span>
-        <DeviceMenu device={device} onDelete={onDelete} />
+        <DeviceMenu device={device} onDelete={onDelete} onAssign={onAssign} />
       </header>
 
       <dl className="space-y-2 px-4 pb-4 text-xs">
         <Row label="Garden">
-          <Link href={`/gardens/${device.gardenId}`} className="truncate font-semibold text-emerald-600 hover:underline dark:text-emerald-400">
-            {device.garden.name}
-          </Link>
+          {device.gardenId && device.garden ? (
+            <Link href={`/gardens/${device.gardenId}`} className="truncate font-semibold text-emerald-600 hover:underline dark:text-emerald-400">
+              {device.garden.name}
+            </Link>
+          ) : (
+            <button type="button" onClick={onAssign} className="inline-flex items-center gap-1 font-semibold text-amber-600 hover:underline dark:text-amber-400">
+              Not in a garden · Assign
+            </button>
+          )}
         </Row>
         <Row label="Feeds">
           {device.pots.length ? (
@@ -310,7 +360,7 @@ function DeviceCard({ device, onDelete }: { device: Device; onDelete: () => void
               {device.pots.map((pot) => (
                 <Link
                   key={pot.id}
-                  href={potHref(device.gardenId, pot.id)}
+                  href={potHref(device.gardenId ?? "", pot.id)}
                   title={`Show ${pot.label}`}
                   className="inline-flex items-center gap-0.5 rounded-md bg-emerald-50 px-1.5 py-0.5 text-[11px] font-semibold text-emerald-700 transition hover:bg-emerald-100 hover:underline dark:bg-emerald-500/10 dark:text-emerald-300 dark:hover:bg-emerald-500/20"
                 >
@@ -362,7 +412,7 @@ function potHref(gardenId: string, potId: string) {
   return `/gardens/${gardenId}?tab=pots&pot=${potId}`;
 }
 
-function DeviceMenu({ device, onDelete }: { device: Device; onDelete: () => void }) {
+function DeviceMenu({ device, onDelete, onAssign }: { device: Device; onDelete: () => void; onAssign: () => void }) {
   const name = device.name;
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -391,7 +441,7 @@ function DeviceMenu({ device, onDelete }: { device: Device; onDelete: () => void
                 <Link
                   key={pot.id}
                   role="menuitem"
-                  href={potHref(device.gardenId, pot.id)}
+                  href={potHref(device.gardenId ?? "", pot.id)}
                   onClick={() => setOpen(false)}
                   className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
                 >
@@ -402,15 +452,29 @@ function DeviceMenu({ device, onDelete }: { device: Device; onDelete: () => void
               <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
             </>
           ) : null}
-          <Link
+          <button
             role="menuitem"
-            href={`/gardens/${device.gardenId}?tab=devices`}
-            onClick={() => setOpen(false)}
-            className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              onAssign();
+            }}
+            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
           >
-            <ArrowUpRight size={15} className="text-slate-400" />
-            Open {device.garden.name}
-          </Link>
+            <Package size={15} className="text-slate-400" />
+            {device.gardenId ? "Move or rename" : "Assign to garden & pot"}
+          </button>
+          {device.gardenId && device.garden ? (
+            <Link
+              role="menuitem"
+              href={`/gardens/${device.gardenId}?tab=devices`}
+              onClick={() => setOpen(false)}
+              className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              <ArrowUpRight size={15} className="text-slate-400" />
+              Open {device.garden.name}
+            </Link>
+          ) : null}
           <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
           <button
             role="menuitem"
@@ -427,6 +491,168 @@ function DeviceMenu({ device, onDelete }: { device: Device; onDelete: () => void
         </div>
       ) : null}
     </div>
+  );
+}
+
+interface FoundBoard {
+  hardwareId: string;
+  lastSeenAt: string;
+  existingName: string | null;
+}
+
+/** Boards that announced themselves on the network and are waiting to be added. */
+function NewDevicesFound({ onSetUp }: { onSetUp: (hardwareId: string) => void }) {
+  const { data: found } = useSWR<FoundBoard[]>("/api/devices/pairing", { refreshInterval: 4000 });
+  if (!found?.length) return null;
+
+  return (
+    <section className="mb-5 rounded-2xl border border-emerald-300 bg-emerald-50/70 p-4 dark:border-emerald-500/30 dark:bg-emerald-500/5">
+      <div className="flex items-start gap-3">
+        <span className="relative grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-emerald-600 text-white">
+          <Wifi size={17} />
+          <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 animate-ping rounded-full bg-emerald-400 motion-reduce:hidden" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2 className="font-bold text-emerald-900 dark:text-emerald-100">
+            New {found.length === 1 ? "device" : "devices"} found
+          </h2>
+          <p className="text-xs text-emerald-800/80 dark:text-emerald-200/70">
+            These boards are on your network and ready to add. Choose a pot, then press the board&apos;s BOOT button.
+          </p>
+        </div>
+      </div>
+      <ul className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+        {found.map((board) => (
+          <li key={board.hardwareId} className="flex items-center gap-3 rounded-xl bg-white px-3 py-2.5 shadow-sm dark:bg-slate-900">
+            <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-300">
+              <Cpu size={16} />
+            </span>
+            <span className="min-w-0 flex-1 leading-tight">
+              <span className="block truncate font-mono text-sm font-bold">{board.hardwareId}</span>
+              <span className="block truncate text-[11px] text-slate-500 dark:text-slate-400">
+                {board.existingName ? `Was “${board.existingName}” · ` : ""}seen {timeAgo(board.lastSeenAt)}
+              </span>
+            </span>
+            <button
+              type="button"
+              onClick={() => onSetUp(board.hardwareId)}
+              className="shrink-0 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-700"
+            >
+              Set up
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** Place a device in a garden and pot (or take it out), and rename it. */
+function AssignPanel({
+  device,
+  gardens,
+  onClose,
+  onSaved,
+}: {
+  device: Device | null;
+  gardens: Garden[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  return (
+    <SlideOver
+      open={device !== null}
+      onClose={onClose}
+      title={device?.gardenId ? `Move ${device.name}` : `Assign ${device?.name ?? "device"}`}
+      description="Choose where this board lives. Its readings and pump follow the pot you pick."
+      footer={
+        <>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+          >
+            Cancel
+          </button>
+          <button type="submit" form="assign-form" className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700">
+            <Check size={16} />
+            Save
+          </button>
+        </>
+      }
+    >
+      {device ? <AssignFields key={device.id} device={device} gardens={gardens} onSaved={onSaved} /> : null}
+    </SlideOver>
+  );
+}
+
+function AssignFields({ device, gardens, onSaved }: { device: Device; gardens: Garden[]; onSaved: () => void }) {
+  const [gardenId, setGardenId] = useState(device.gardenId ?? "");
+  const [potId, setPotId] = useState(device.pots[0]?.id ?? "");
+  const [name, setName] = useState(device.name);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const { data: pots } = useSWR<{ id: string; label: string; plant: { commonName: string } | null }[]>(
+    gardenId ? `/api/pots?gardenId=${gardenId}` : null,
+  );
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    setSaving(true);
+    try {
+      await apiPatch(`/api/devices/${device.id}`, {
+        name: name.trim(),
+        gardenId: gardenId || null,
+        potId: gardenId && potId ? potId : null,
+      });
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form id="assign-form" onSubmit={submit} className="space-y-4" aria-busy={saving}>
+      <Input label="Device name" value={name} onChange={setName} required />
+      <label className="block">
+        <span className="mb-1 block text-sm font-bold text-slate-700 dark:text-slate-200">Garden</span>
+        <select
+          value={gardenId}
+          onChange={(e) => {
+            setGardenId(e.target.value);
+            setPotId("");
+          }}
+          className={fieldClass}
+        >
+          <option value="">Not in a garden</option>
+          {gardens.map((garden) => (
+            <option key={garden.id} value={garden.id}>
+              {garden.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="block">
+        <span className="mb-1 block text-sm font-bold text-slate-700 dark:text-slate-200">Pot it measures and waters</span>
+        <select value={potId} onChange={(e) => setPotId(e.target.value)} disabled={!gardenId} className={`${fieldClass} disabled:opacity-50`}>
+          <option value="">No pot</option>
+          {(pots ?? []).map((pot) => (
+            <option key={pot.id} value={pot.id}>
+              {pot.label}
+              {pot.plant ? ` — ${pot.plant.commonName}` : ""}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="text-xs text-slate-500 dark:text-slate-400">
+        Changes apply right away — the board doesn&apos;t need to be re-flashed.
+      </p>
+      {error ? <p className="text-sm font-bold text-rose-600">{error}</p> : null}
+      {saving ? <p className="text-sm text-slate-500">Saving…</p> : null}
+    </form>
   );
 }
 

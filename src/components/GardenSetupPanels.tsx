@@ -8,7 +8,7 @@ import { Check, Copy, Cpu, Flower2, KeyRound, Leaf, Package, Sprout, Sun, Thermo
 import { Input } from "@/components/Input";
 import { SlideOver } from "@/components/SlideOver";
 import { DEVICE_TYPE_LABELS } from "@/components/device-ui";
-import { apiPost } from "@/lib/api-client";
+import { apiPatch, apiPost } from "@/lib/api-client";
 import {
   PLANT_CATALOG,
   SOIL_LABELS,
@@ -722,10 +722,310 @@ export function DeviceKey({ created }: { created: { name: string; hardwareId: st
       <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600 dark:bg-slate-950/60 dark:text-slate-300">
         <p className="font-semibold">Next steps</p>
         <ol className="mt-1 list-decimal space-y-1 pl-4">
-          <li>Put the hardware ID and key in the ESP32 firmware (<code>secrets.h</code>), or in the simulator&apos;s <code>DEVICE_ID</code> / <code>DEVICE_KEY</code>.</li>
+          <li>For the simulator, use these as <code>DEVICE_ID</code> / <code>DEVICE_KEY</code>. SmartAgri ESP32 boards don&apos;t need this — they get their key automatically when claimed on the Sensors page.</li>
           <li>Power it on — it shows as Online once its first reading arrives.</li>
         </ol>
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Edit an existing pot and its plant
+// ---------------------------------------------------------------------------
+
+const HEALTH_OPTIONS = ["healthy", "at_risk", "diseased", "recovering", "unknown"] as const;
+const EDIT_STAGES = ["seedling", "vegetative", "flowering", "fruiting", "mature", "harvested"] as const;
+
+export interface EditablePot {
+  id: string;
+  label: string;
+  soilType: SoilType;
+  moistureOnThreshold: number;
+  moistureOffThreshold: number;
+  plant: { id: string; commonName: string } | null;
+}
+
+interface PotDetails {
+  id: string;
+  sizeCm: number | null;
+  position: string | null;
+}
+interface PlantDetails {
+  id: string;
+  potId: string;
+  commonName: string;
+  variety: string | null;
+  growthStage: (typeof EDIT_STAGES)[number];
+  healthStatus: (typeof HEALTH_OPTIONS)[number];
+}
+
+export function EditPotPanel({
+  open,
+  onClose,
+  gardenId,
+  pot,
+  onSaved,
+}: {
+  open: boolean;
+  onClose: () => void;
+  gardenId: string;
+  pot: EditablePot | null;
+  onSaved: () => void;
+}) {
+  const { data: pots } = useSWR<PotDetails[]>(open ? `/api/pots?gardenId=${gardenId}` : null);
+  const { data: plants } = useSWR<PlantDetails[]>(open ? `/api/plants?gardenId=${gardenId}` : null);
+  const details = pots?.find((item) => item.id === pot?.id);
+  const plant = plants?.find((item) => item.potId === pot?.id) ?? null;
+  const ready = Boolean(pot && pots && plants);
+
+  return (
+    <SlideOver
+      open={open}
+      onClose={onClose}
+      title={`Edit ${pot?.label ?? "pot"}`}
+      description="Change the plant, the pot and when it gets watered."
+      footer={
+        <>
+          <button type="button" onClick={onClose} className={secondaryButton}>
+            Cancel
+          </button>
+          <button type="submit" form="edit-pot-form" disabled={!ready} className={primaryButton}>
+            <Check size={16} />
+            Save changes
+          </button>
+        </>
+      }
+    >
+      {open && pot && ready ? (
+        <EditPotFields
+          key={pot.id}
+          pot={pot}
+          details={details ?? { id: pot.id, sizeCm: null, position: null }}
+          plant={plant}
+          gardenId={gardenId}
+          onSaved={() => {
+            onSaved();
+            onClose();
+          }}
+        />
+      ) : open ? (
+        <div className="space-y-3" aria-hidden="true">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="h-10 animate-pulse rounded-lg bg-slate-100 dark:bg-slate-800" />
+          ))}
+        </div>
+      ) : null}
+    </SlideOver>
+  );
+}
+
+function EditPotFields({
+  pot,
+  details,
+  plant,
+  gardenId,
+  onSaved,
+}: {
+  pot: EditablePot;
+  details: PotDetails;
+  plant: PlantDetails | null;
+  gardenId: string;
+  onSaved: () => void;
+}) {
+  const initial = {
+    plantName: plant?.commonName ?? "",
+    variety: plant?.variety ?? "",
+    growthStage: plant?.growthStage ?? "seedling",
+    healthStatus: plant?.healthStatus ?? "unknown",
+    label: pot.label,
+    soilType: pot.soilType,
+    sizeCm: details.sizeCm != null ? String(details.sizeCm) : "",
+    position: details.position ?? "",
+    waterBelow: String(pot.moistureOnThreshold),
+    stopAt: String(pot.moistureOffThreshold),
+  };
+  const [form, setForm] = useState(initial);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => setForm((f) => ({ ...f, [key]: value }));
+  const profile = findPlantProfile(form.plantName);
+  const recommendationApplied =
+    profile &&
+    form.soilType === profile.soil &&
+    form.waterBelow === String(profile.moisture[0]) &&
+    form.stopAt === String(profile.moisture[1]);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    const waterBelow = Number(form.waterBelow);
+    const stopAt = Number(form.stopAt);
+    if (!(waterBelow < stopAt)) {
+      setError("“Start watering below” must be lower than “Stop watering at”.");
+      return;
+    }
+    if (!form.plantName.trim()) {
+      setError("Every pot needs a plant.");
+      return;
+    }
+    setSaving(true);
+    try {
+      // Pot details
+      const potChanges: Record<string, unknown> = {};
+      if (form.label.trim() !== initial.label) potChanges.label = form.label.trim();
+      if (form.soilType !== initial.soilType) potChanges.soilType = form.soilType;
+      if (form.sizeCm !== initial.sizeCm) potChanges.sizeCm = form.sizeCm ? Number(form.sizeCm) : null;
+      if (form.position.trim() !== initial.position) potChanges.position = form.position.trim() || null;
+      if (Object.keys(potChanges).length) await apiPatch(`/api/pots/${pot.id}`, potChanges);
+
+      // Watering levels (this also re-evaluates automatic watering)
+      if (form.waterBelow !== initial.waterBelow || form.stopAt !== initial.stopAt) {
+        await apiPatch(`/api/pots/${pot.id}/irrigation`, { moistureOnThreshold: waterBelow, moistureOffThreshold: stopAt });
+      }
+
+      // Plant
+      const plantFields = {
+        commonName: profile?.name ?? form.plantName.trim(),
+        variety: form.variety.trim(),
+        growthStage: form.growthStage,
+        healthStatus: form.healthStatus,
+      };
+      if (plant) {
+        const changed =
+          plantFields.commonName !== initial.plantName ||
+          plantFields.variety !== initial.variety ||
+          plantFields.growthStage !== initial.growthStage ||
+          plantFields.healthStatus !== initial.healthStatus;
+        if (changed) await apiPatch(`/api/plants/${plant.id}`, plantFields);
+      } else {
+        await apiPost("/api/plants", {
+          gardenId,
+          potId: pot.id,
+          commonName: plantFields.commonName,
+          variety: plantFields.variety || undefined,
+          growthStage: plantFields.growthStage,
+        });
+      }
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save changes");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form id="edit-pot-form" onSubmit={submit} className="space-y-5" aria-busy={saving}>
+      <section className="space-y-4" aria-label="Plant">
+        <h3 className="flex items-center gap-2 text-sm font-bold">
+          <Flower2 size={15} className="text-slate-400" />
+          Plant
+        </h3>
+        <label className="block">
+          <span className="mb-1 block text-sm font-bold text-slate-700 dark:text-slate-200">Plant name</span>
+          <input
+            list="plant-catalog-edit"
+            value={form.plantName}
+            onChange={(e) => set("plantName", e.target.value)}
+            required
+            autoComplete="off"
+            className={fieldClass}
+          />
+          <datalist id="plant-catalog-edit">
+            {PLANT_CATALOG.map((item) => (
+              <option key={item.name} value={item.name}>
+                {item.aliases?.join(", ")}
+              </option>
+            ))}
+          </datalist>
+        </label>
+        <div className="grid grid-cols-2 gap-3">
+          <Input label="Variety" value={form.variety} onChange={(v) => set("variety", v)} placeholder="optional" />
+          <label className="block">
+            <span className="mb-1 block text-sm font-bold text-slate-700 dark:text-slate-200">Growth stage</span>
+            <select value={form.growthStage} onChange={(e) => set("growthStage", e.target.value as typeof form.growthStage)} className={fieldClass}>
+              {EDIT_STAGES.map((stage) => (
+                <option key={stage} value={stage}>
+                  {stage.charAt(0).toUpperCase() + stage.slice(1)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <label className="block">
+          <span className="mb-1 block text-sm font-bold text-slate-700 dark:text-slate-200">Health</span>
+          <select value={form.healthStatus} onChange={(e) => set("healthStatus", e.target.value as typeof form.healthStatus)} className={fieldClass}>
+            {HEALTH_OPTIONS.map((status) => (
+              <option key={status} value={status}>
+                {status === "at_risk" ? "At risk" : status.charAt(0).toUpperCase() + status.slice(1)}
+              </option>
+            ))}
+          </select>
+        </label>
+        {profile && !recommendationApplied ? (
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50/60 px-3 py-2.5 text-xs dark:border-emerald-500/25 dark:bg-emerald-500/5">
+            <span className="text-emerald-900 dark:text-emerald-100">
+              <Leaf size={13} className="mr-1 inline" />
+              {profile.name} prefers {SOIL_LABELS[profile.soil].toLowerCase()} soil and {profile.moisture[0]}–{profile.moisture[1]}% moisture.
+            </span>
+            <button
+              type="button"
+              onClick={() =>
+                setForm((f) => ({
+                  ...f,
+                  soilType: profile.soil,
+                  waterBelow: String(profile.moisture[0]),
+                  stopAt: String(profile.moisture[1]),
+                }))
+              }
+              className="shrink-0 rounded-md bg-emerald-600 px-2 py-1 font-semibold text-white hover:bg-emerald-700"
+            >
+              Use these
+            </button>
+          </div>
+        ) : null}
+      </section>
+
+      <section className="space-y-4 border-t border-slate-100 pt-5 dark:border-slate-800" aria-label="Pot">
+        <h3 className="flex items-center gap-2 text-sm font-bold">
+          <Package size={15} className="text-slate-400" />
+          Pot
+        </h3>
+        <div className="grid grid-cols-2 gap-3">
+          <Input label="Pot label" value={form.label} onChange={(v) => set("label", v)} required />
+          <label className="block">
+            <span className="mb-1 block text-sm font-bold text-slate-700 dark:text-slate-200">Soil</span>
+            <select value={form.soilType} onChange={(e) => set("soilType", e.target.value as SoilType)} className={fieldClass}>
+              {(Object.keys(SOIL_LABELS) as SoilType[]).map((soil) => (
+                <option key={soil} value={soil}>
+                  {SOIL_LABELS[soil]}
+                  {profile?.soil === soil ? " (recommended)" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Input label="Pot size, cm" value={form.sizeCm} onChange={(v) => set("sizeCm", v)} type="number" step="any" />
+          <Input label="Position" value={form.position} onChange={(v) => set("position", v)} placeholder="e.g. Balcony, left" />
+        </div>
+      </section>
+
+      <section className="space-y-3 border-t border-slate-100 pt-5 dark:border-slate-800" aria-label="Watering">
+        <h3 className="flex items-center gap-2 text-sm font-bold">
+          <Sprout size={15} className="text-slate-400" />
+          Watering
+        </h3>
+        <div className="grid grid-cols-2 gap-3">
+          <Input label="Start watering below (%)" value={form.waterBelow} onChange={(v) => set("waterBelow", v)} type="number" step="1" required />
+          <Input label="Stop watering at (%)" value={form.stopAt} onChange={(v) => set("stopAt", v)} type="number" step="1" required />
+        </div>
+        <p className="text-xs text-slate-500 dark:text-slate-400">Automatic watering keeps soil moisture between these levels.</p>
+      </section>
+
+      {error ? <p className="text-sm font-bold text-rose-600">{error}</p> : null}
+      {saving ? <p className="text-sm text-slate-500">Saving…</p> : null}
+    </form>
   );
 }

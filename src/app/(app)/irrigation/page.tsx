@@ -3,8 +3,9 @@
 // PAGE: Smart irrigation — pick a garden, see every pot's moisture at a glance,
 // and control one pot: automatic vs manual, pump on/off, watering levels and
 // its recent history.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import {
   Check,
@@ -82,9 +83,20 @@ function moistureState(pot: Pot) {
   return { text: "Just right", tone: "text-emerald-600 dark:text-emerald-400", bar: "bg-emerald-500" };
 }
 
+// ?garden=<id>&pot=<id> (e.g. a pot card's "Watering settings") opens that
+// pot directly; reading search params needs a Suspense boundary.
 export default function IrrigationPage() {
+  return (
+    <Suspense fallback={null}>
+      <IrrigationContent />
+    </Suspense>
+  );
+}
+
+function IrrigationContent() {
+  const searchParams = useSearchParams();
   const { data: gardens } = useSWR<Garden[]>("/api/gardens");
-  const [chosenGardenId, setChosenGardenId] = useState<string | null>(null);
+  const [chosenGardenId, setChosenGardenId] = useState<string | null>(() => searchParams.get("garden"));
   const savedGardenId = getSelectedGardenId();
   const gardenId =
     chosenGardenId ??
@@ -93,7 +105,7 @@ export default function IrrigationPage() {
   const { data: pots, mutate: mutatePots } = useSWR<Pot[]>(gardenId ? `/api/pots?gardenId=${gardenId}` : null, {
     refreshInterval: 5000,
   });
-  const [chosenPotId, setChosenPotId] = useState<string | null>(null);
+  const [chosenPotId, setChosenPotId] = useState<string | null>(() => searchParams.get("pot"));
   const [potQuery, setPotQuery] = useState("");
   const sortedPots = [...(pots ?? [])].sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }));
   const selectedPot = sortedPots.find((pot) => pot.id === chosenPotId) ?? sortedPots[0];

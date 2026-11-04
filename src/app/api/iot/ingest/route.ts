@@ -184,7 +184,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const device = await prisma.device.findUnique({
+    const found = await prisma.device.findUnique({
       where: { hardwareId },
       select: {
         id: true,
@@ -199,12 +199,22 @@ export async function POST(req: Request) {
       },
     });
 
-    if (!device || device.apiKeyHash !== hashDeviceKey(key)) {
+    if (!found || found.apiKeyHash !== hashDeviceKey(key)) {
       return NextResponse.json(
         { error: "Invalid device or key" },
         { status: 401 },
       );
     }
+
+    // Added but not placed in a garden yet: show it as online, store nothing.
+    if (!found.gardenId || !found.garden) {
+      await prisma.device.update({ where: { id: found.id }, data: { lastSeenAt: new Date(), status: "ONLINE" } });
+      return NextResponse.json(
+        { error: "This device isn't in a garden yet. Choose its garden and pot in the app.", unassigned: true },
+        { status: 409 },
+      );
+    }
+    const device = { ...found, gardenId: found.gardenId, garden: found.garden };
 
     const recordedAt = parsed.data.recordedAt
       ? new Date(parsed.data.recordedAt)

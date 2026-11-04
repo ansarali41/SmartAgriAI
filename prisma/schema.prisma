@@ -227,6 +227,36 @@ model Garden {
   @@index([userId, status])
 }
 
+// A board that has announced itself but isn't claimed yet (or is waiting to
+// collect its key after a claim). The board proves it is the same board with
+// a random secret (stored hashed); the user proves physical access with the
+// short pairing code the board prints. See lib/device-pairing.
+model DevicePairing {
+  id              String    @id @default(cuid())
+  hardwareId      String    @unique
+  secretHash      String
+  pairingCode     String
+  firmware        String?
+  failedAttempts  Int       @default(0)
+  lastSeenAt      DateTime  @default(now())
+  claimedAt       DateTime?
+  claimedByUserId String?
+  deviceId        String?
+  // Plaintext key held only until the board collects it (then cleared).
+  pendingKey      String?
+  keyExpiresAt    DateTime?
+  // Button claim: the app asked the user to press BOOT on the board. The
+  // board confirms within the window and the claim is completed with these.
+  confirmRequestedAt DateTime?
+  requestUserId      String?
+  requestGardenId    String?
+  requestPotId       String?
+  requestName        String?
+  createdAt       DateTime  @default(now())
+
+  @@index([claimedAt, lastSeenAt])
+}
+
 // A user's "mark resolved" on a computed garden alert (see lib/garden-alerts).
 // Rows are removed automatically once the alert's condition clears, so the
 // same problem alerts again if it comes back.
@@ -308,7 +338,8 @@ model Plant {
 model Device {
   id              String         @id @default(cuid())
   userId          String
-  gardenId        String
+  // Optional: a board can be added first and placed in a garden later.
+  gardenId        String?
   hardwareId      String         @unique
   name            String
   type            DeviceType     @default(esp32_node)
@@ -322,7 +353,7 @@ model Device {
   updatedAt       DateTime       @updatedAt
 
   user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  garden   Garden    @relation(fields: [gardenId], references: [id], onDelete: Cascade)
+  garden   Garden?   @relation(fields: [gardenId], references: [id], onDelete: Cascade)
   readings Reading[]
   commands DeviceCommand[]
   potMappings DevicePotMapping[]

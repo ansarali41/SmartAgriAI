@@ -566,7 +566,8 @@ function SummaryTile({
 }
 
 function deviceStatusSummary(devices: number, overview?: GardenOverview) {
-  if (devices === 0) return { dot: "bg-slate-300 dark:bg-slate-600", text: "No devices" };
+  // No sensor watching this garden: flag it red so it stands out.
+  if (devices === 0) return { dot: "bg-rose-500", text: "No devices" };
   if (!overview) return { dot: "bg-slate-300 dark:bg-slate-600", text: "Checking…" };
   const { online, stale = 0, offline } = overview.deviceSummary;
   // Devices that have never reported are not counted in any bucket.

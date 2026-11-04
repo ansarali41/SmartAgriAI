@@ -37,7 +37,8 @@ import {
 } from "lucide-react";
 import { Card } from "@/components/ui";
 import { SlideOver } from "@/components/SlideOver";
-import { AddDevicePanel, AddPlantingPanel } from "@/components/GardenSetupPanels";
+import { AddDevicePanel, AddPlantingPanel, EditPotPanel, type EditablePot } from "@/components/GardenSetupPanels";
+import { AddDeviceGuide } from "@/components/AddDeviceGuide";
 import { useDismiss } from "@/components/HeaderMenus";
 import { DEVICE_TYPE_LABELS, deviceStatus, timeAgo } from "@/components/device-ui";
 import {
@@ -82,6 +83,7 @@ interface GardenActivity {
     pumpState: string;
     moistureOnThreshold: number;
     moistureOffThreshold: number;
+    soilType?: string;
     plant: { id: string; commonName: string; healthStatus: string } | null;
     currentMoisture: number | null;
     moistureRecordedAt: string | null;
@@ -146,6 +148,10 @@ function GardenDetails() {
   const [addingPlanting, setAddingPlanting] = useState(false);
   // Devices are only added from a pot, and connected to it.
   const [addingDeviceFor, setAddingDeviceFor] = useState<{ id: string; label: string } | null>(null);
+  // Real boards are added through the guide (find -> choose pot -> press BOOT);
+  // addingDeviceFor is the key-based fallback for the simulator.
+  const [guideForPot, setGuideForPot] = useState<{ id: string; label: string } | null>(null);
+  const [editingPot, setEditingPot] = useState<EditablePot | null>(null);
 
   if (error) {
     return (
@@ -194,6 +200,18 @@ function GardenDetails() {
       setFormError(err instanceof Error ? err.message : "Failed");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function removePot(pot: GardenActivity["pots"][number]) {
+    const what = pot.plant ? `${pot.label} and its ${pot.plant.commonName}` : pot.label;
+    if (!window.confirm(`Delete ${what}? Its readings and watering history are removed too.`)) return;
+    try {
+      await apiDelete(`/api/pots/${pot.id}`);
+      mutate();
+      mutateActivity();
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Failed to delete pot");
     }
   }
 
@@ -406,7 +424,19 @@ function GardenDetails() {
                   highlighted={pot.id === focusPotId}
                   devices={devices}
                   onChange={mutateActivity}
-                  onAddDevice={() => setAddingDeviceFor({ id: pot.id, label: pot.label })}
+                  onAddDevice={() => setGuideForPot({ id: pot.id, label: pot.label })}
+                  onEdit={() =>
+                    setEditingPot({
+                      id: pot.id,
+                      label: pot.label,
+                      soilType: (pot.soilType ?? "loam") as EditablePot["soilType"],
+                      moistureOnThreshold: pot.moistureOnThreshold,
+                      moistureOffThreshold: pot.moistureOffThreshold,
+                      plant: pot.plant ? { id: pot.plant.id, commonName: pot.plant.commonName } : null,
+                    })
+                  }
+                  onDelete={() => removePot(pot)}
+                  wateringHref={`/irrigation?garden=${garden.id}&pot=${pot.id}`}
                 />
               ))}
             </div>
@@ -476,6 +506,31 @@ function GardenDetails() {
           mutate();
           mutateActivity();
           setTab("pots");
+        }}
+      />
+      <AddDeviceGuide
+        open={guideForPot !== null}
+        onClose={() => setGuideForPot(null)}
+        gardens={[{ id: garden.id, name: garden.name }]}
+        initialGardenId={garden.id}
+        initialPotId={guideForPot?.id}
+        onDone={() => {
+          mutate();
+          mutateActivity();
+        }}
+        onManual={() => {
+          setAddingDeviceFor(guideForPot);
+          setGuideForPot(null);
+        }}
+      />
+      <EditPotPanel
+        open={editingPot !== null}
+        onClose={() => setEditingPot(null)}
+        gardenId={garden.id}
+        pot={editingPot}
+        onSaved={() => {
+          mutate();
+          mutateActivity();
         }}
       />
       <AddDevicePanel
@@ -1060,6 +1115,8 @@ const HEALTH_PILL: Record<string, string> = {
   healthy: "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300",
   diseased: "bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300",
   stressed: "bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300",
+  at_risk: "bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300",
+  recovering: "bg-sky-50 text-sky-700 dark:bg-sky-500/10 dark:text-sky-300",
 };
 
 function PotCard({
@@ -1067,12 +1124,18 @@ function PotCard({
   devices,
   onChange,
   onAddDevice,
+  onEdit,
+  onDelete,
+  wateringHref,
   highlighted = false,
 }: {
   pot: GardenActivity["pots"][number];
   devices: GardenActivity["devices"];
   onChange: () => void;
   onAddDevice: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  wateringHref: string;
   /** Deep-linked pot: scroll it into view and ring it. */
   highlighted?: boolean;
 }) {
@@ -1120,11 +1183,12 @@ function PotCard({
             )}
             {health && health !== "unknown" ? (
               <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold capitalize ${HEALTH_PILL[health] ?? HEALTH_PILL.stressed}`}>
-                {health}
+                {health.replace("_", " ")}
               </span>
             ) : null}
           </p>
         </div>
+        <PotMenu label={pot.label} onEdit={onEdit} onAddDevice={onAddDevice} onDelete={onDelete} wateringHref={wateringHref} />
       </header>
 
       {/* Moisture */}
@@ -1182,6 +1246,75 @@ function PotCard({
   );
 }
 
+/** Pot card ⋮ menu: edit, add a device, watering settings, delete. */
+function PotMenu({
+  label,
+  onEdit,
+  onAddDevice,
+  onDelete,
+  wateringHref,
+}: {
+  label: string;
+  onEdit: () => void;
+  onAddDevice: () => void;
+  onDelete: () => void;
+  wateringHref: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  useDismiss(open, close, rootRef, triggerRef);
+  const item =
+    "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800";
+  const run = (action: () => void) => {
+    setOpen(false);
+    action();
+  };
+
+  return (
+    <div ref={rootRef} className="relative -mr-1.5 -mt-1">
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-label={`Actions for ${label}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+      >
+        <EllipsisVertical size={16} />
+      </button>
+      {open ? (
+        <div role="menu" className="animate-fade-in absolute right-0 top-full z-30 mt-1 w-52 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl shadow-slate-950/10 dark:border-slate-800 dark:bg-slate-900 dark:shadow-black/40">
+          <button role="menuitem" type="button" onClick={() => run(onEdit)} className={item}>
+            <Pencil size={15} className="text-slate-400" />
+            Edit pot & plant
+          </button>
+          <button role="menuitem" type="button" onClick={() => run(onAddDevice)} className={item}>
+            <Cpu size={15} className="text-slate-400" />
+            Add device
+          </button>
+          <Link role="menuitem" href={wateringHref} onClick={() => setOpen(false)} className={item}>
+            <Droplets size={15} className="text-slate-400" />
+            Watering settings
+          </Link>
+          <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
+          <button
+            role="menuitem"
+            type="button"
+            onClick={() => run(onDelete)}
+            className={`${item} text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-500/10`}
+          >
+            <Trash2 size={15} />
+            Delete pot
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /** One-row sensor status for a pot, with a menu to connect or disconnect. */
 function PotSensor({
   pot,
@@ -1203,7 +1336,13 @@ function PotSensor({
   useDismiss(open, close, rootRef, triggerRef);
 
   const connectedIds = new Set(pot.sensors.map((sensor) => sensor.id));
-  const available = devices.filter((device) => !connectedIds.has(device.id));
+  // Devices added without a garden can be placed here too (they join this garden).
+  const { data: allDevices } = useSWR<{ id: string; name: string; status: string; gardenId: string | null }[]>("/api/devices");
+  const unassigned = (allDevices ?? []).filter((device) => !device.gardenId);
+  const available = [
+    ...devices.filter((device) => !connectedIds.has(device.id)),
+    ...unassigned.map((device) => ({ ...device, unassigned: true as const })),
+  ];
   const primary = pot.sensors[0];
 
   async function change(method: "POST" | "DELETE", deviceId: string) {
@@ -1293,6 +1432,7 @@ function PotSensor({
                   <button key={device.id} role="menuitem" type="button" onClick={() => change("POST", device.id)} className={itemClass}>
                     <span className={`h-2 w-2 shrink-0 rounded-full ${deviceStatus(device.status).dot}`} />
                     <span className="truncate">{device.name}</span>
+                    {"unassigned" in device ? <span className="ml-auto shrink-0 text-[10px] font-semibold text-amber-600 dark:text-amber-400">new</span> : null}
                   </button>
                 ))}
               </>

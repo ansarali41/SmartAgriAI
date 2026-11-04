@@ -60,7 +60,7 @@ export async function runDeviceOfflineMonitor(options: {
         eventRef: device.id,
         messageText: formatDeviceOfflineNotification({
           deviceName: device.name,
-          gardenName: device.garden.name,
+          gardenName: device.garden?.name ?? "No garden",
           lastSeenAt,
           thresholdSeconds: thresholdMs / 1_000,
         }),
