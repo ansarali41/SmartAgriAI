@@ -25,7 +25,7 @@ const RECENT_PUMP_EVENTS = 6;
 const RECENT_DISEASE_RECORDS = 4;
 
 export function GardenDashboard({ gardenId, backHref = "/gardens", backLabel = "Back to gardens", headerTitle, headerAction }: { gardenId: string; backHref?: string; backLabel?: string; headerTitle?: string; headerAction?: ReactNode }) {
-  const { data, error, mutate } = useSWR<DashboardData>(gardenId ? `/api/gardens/${gardenId}/dashboard` : null, { refreshInterval: 30000 });
+  const { data, error, mutate } = useSWR<DashboardData>(gardenId ? `/api/gardens/${gardenId}/dashboard` : null, { refreshInterval: 5000 });
 
   if (error) return <Card><p className="font-bold text-rose-600">Unable to load this garden dashboard.</p><button type="button" onClick={() => mutate()} className="mt-3 rounded-lg border border-slate-300 px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">Try again</button></Card>;
   if (!data) return <DashboardLoading />;

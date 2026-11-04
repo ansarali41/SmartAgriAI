@@ -49,7 +49,7 @@
 #define COMMUNICATION_LOSS_FAILSAFE_MS 60000UL
 #endif
 
-#define FIRMWARE_VERSION "smartagri-2.3"
+#define FIRMWARE_VERSION "smartagri-2.4"
 #define SETUP_AP_NAME "SmartAgri-Setup"
 
 const int SOIL_PIN = 36;   // GPIO36 / VP (ADC1); safe to use while Wi-Fi is active.
@@ -311,20 +311,45 @@ void processPendingCommands() {
 // Telemetry
 // ---------------------------------------------------------------------------
 
-int readMoisturePercent() {
-  int raw = analogRead(SOIL_PIN);
+// Median of several samples: ignores one-off spikes (e.g. when the relay or
+// pump switches) that would otherwise flip automatic watering on and off.
+int readSoilRaw() {
+  const int n = 15;
+  int samples[n];
+  for (int i = 0; i < n; i++) {
+    samples[i] = analogRead(SOIL_PIN);
+    delay(4);
+  }
+  for (int i = 1; i < n; i++) {
+    int v = samples[i], j = i - 1;
+    while (j >= 0 && samples[j] > v) { samples[j + 1] = samples[j]; j--; }
+    samples[j + 1] = v;
+  }
+  return samples[n / 2];
+}
+
+// A disconnected signal wire reads ~0, a disconnected ground ~4095. Neither is
+// real soil, so report "no reading" instead of a fake 100% / 0%.
+bool soilRawLooksValid(int raw) {
+  return raw > 50 && raw < 4080;
+}
+
+int moisturePercent(int raw) {
   int percentage = map(raw, SOIL_RAW_DRY, SOIL_RAW_WET, 0, 100);
   return constrain(percentage, 0, 100);
 }
 
 void sendTelemetry() {
-  int raw = analogRead(SOIL_PIN);
-  int moisture = readMoisturePercent();
+  int raw = readSoilRaw();
+  bool valid = soilRawLooksValid(raw);
+  int moisture = moisturePercent(raw);
 
   // No pot ID: the server records it on the pot this device is connected to.
+  // With a faulty reading only the pump state is sent, so automatic watering
+  // never acts on it.
   JsonDocument doc;
   doc["hardwareId"] = hardwareId;
-  doc["soil_moisture"] = moisture;
+  if (valid) doc["soil_moisture"] = moisture;
   doc["pump"] = pumpIsOn;
   String body;
   serializeJson(doc, body);
@@ -333,7 +358,8 @@ void sendTelemetry() {
   int code = request("POST", "/api/iot/ingest", body, &response, true);
   if (code == 401) return forgetKey("telemetry");
   if (code >= 200 && code < 300) {
-    Serial.printf("Sent moisture=%d%% (raw %d) pump=%s\n", moisture, raw, pumpIsOn ? "ON" : "OFF");
+    if (valid) Serial.printf("Sent moisture=%d%% (raw %d) pump=%s\n", moisture, raw, pumpIsOn ? "ON" : "OFF");
+    else Serial.printf("Soil sensor not connected (raw %d) - check the AO/VCC/GND wires. pump=%s\n", raw, pumpIsOn ? "ON" : "OFF");
   } else if (code == 400 && response.indexOf("potId") >= 0) {
     Serial.println("Not connected to a pot yet - choose one for this device in the app.");
   } else {

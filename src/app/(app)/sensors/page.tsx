@@ -75,7 +75,7 @@ function SensorsContent() {
   const linkedBoard = searchParams.get("claim");
   const linkedCode = searchParams.get("code");
   const { data: gardens } = useSWR<Garden[]>("/api/gardens");
-  const { data: devices, mutate } = useSWR<Device[]>("/api/devices", { refreshInterval: 10000 });
+  const { data: devices, mutate } = useSWR<Device[]>("/api/devices", { refreshInterval: 5000 });
   const [query, setQuery] = useState("");
   const [gardenFilter, setGardenFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");

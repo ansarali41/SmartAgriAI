@@ -298,6 +298,23 @@ export async function POST(req: Request) {
         );
       }
 
+      // The board is the source of truth for its relay. It switches the pump
+      // OFF on every restart (and on communication loss), so if it reports a
+      // state different from ours while no command is on its way, adopt it —
+      // otherwise automatic mode would never re-issue PUMP_ON.
+      if (input.pump !== undefined) {
+        const reported = input.pump ? "on" : "off";
+        const inFlight = await prisma.deviceCommand.count({
+          where: { deviceId: device.id, potId, status: { in: ["PENDING", "SENT", "RETRYING"] } },
+        });
+        if (inFlight === 0) {
+          await prisma.pot.updateMany({
+            where: { id: potId, userId: device.userId, pumpState: { not: reported } },
+            data: { pumpState: reported },
+          });
+        }
+      }
+
       if (input.soilMoisture !== undefined) {
         const moisture = normalizeMoisture(input.soilMoisture);
         data.push({

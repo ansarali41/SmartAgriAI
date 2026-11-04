@@ -135,7 +135,7 @@ function GardenDetails() {
   const { data: garden, error, mutate } = useSWR<GardenDetail>(id ? `/api/gardens/${id}` : null);
   const { data: activity, mutate: mutateActivity } = useSWR<GardenActivity>(
     id ? `/api/gardens/${id}/dashboard` : null,
-    { refreshInterval: 30000 },
+    { refreshInterval: 5000 },
   );
   const selectedId = useSyncExternalStore(subscribeSelected, getSelectedGardenId, () => null);
   const [tab, setTab] = useState<Tab>(() =>
@@ -1119,6 +1119,16 @@ const HEALTH_PILL: Record<string, string> = {
   recovering: "bg-sky-50 text-sky-700 dark:bg-sky-500/10 dark:text-sky-300",
 };
 
+/** Current time, refreshed every 15 s so "how old is this reading" updates. */
+function useNow(intervalMs = 15000) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(timer);
+  }, [intervalMs]);
+  return now;
+}
+
 function PotCard({
   pot,
   devices,
@@ -1143,11 +1153,19 @@ function PotCard({
   useEffect(() => {
     if (highlighted) cardRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [highlighted]);
-  const moisture = pot.currentMoisture;
+  const now = useNow();
+  // A connected sensor reports every 5 s. If it's online but its last soil
+  // reading is old, the probe isn't giving valid readings (loose wire).
+  const sensorOnline = pot.sensors.some((sensor) => sensor.status === "ONLINE");
+  const readingAgeMs = pot.moistureRecordedAt ? now - new Date(pot.moistureRecordedAt).getTime() : Infinity;
+  const probeFault = sensorOnline && readingAgeMs > 60_000;
+  const moisture = probeFault ? null : pot.currentMoisture;
   const low = pot.moistureOnThreshold;
   const high = Math.max(pot.moistureOffThreshold ?? low, low);
   const state =
-    moisture == null
+    probeFault
+      ? { text: "Probe not reading", tone: "text-rose-600 dark:text-rose-400", bar: "bg-slate-300" }
+      : moisture == null
       ? { text: "No reading", tone: "text-slate-400", bar: "bg-slate-300" }
       : moisture < low
         ? { text: "Too dry", tone: "text-amber-600 dark:text-amber-400", bar: "bg-amber-500" }
@@ -1222,6 +1240,14 @@ function PotCard({
           </span>
         </p>
       </div>
+
+      {probeFault ? (
+        <p className="mx-4 mt-2 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:bg-rose-500/10 dark:text-rose-300">
+          The board is online but its soil probe isn&apos;t giving valid readings
+          {pot.currentMoisture != null && pot.moistureRecordedAt ? ` (last ${pot.currentMoisture}% ${timeAgo(pot.moistureRecordedAt)})` : ""}. Check the
+          probe&apos;s AO, VCC and GND wires.
+        </p>
+      ) : null}
 
       {/* Sensor */}
       <PotSensor pot={pot} devices={devices} onChange={onChange} onAddDevice={onAddDevice} />

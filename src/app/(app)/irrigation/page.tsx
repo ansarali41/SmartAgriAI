@@ -63,7 +63,6 @@ interface LogRow {
   startedAt: string;
 }
 
-const STALE_MS = 10 * 60 * 1000;
 
 /** Current time, refreshed periodically so "stale" re-evaluates on its own. */
 function useNow(intervalMs = 30000) {
@@ -75,7 +74,20 @@ function useNow(intervalMs = 30000) {
   return now;
 }
 
-function moistureState(pot: Pot) {
+/** Readings arrive every 5 s; older than this means the probe isn't reporting. */
+const PROBE_SILENT_MS = 60_000;
+
+function probeSilent(pot: Pot, now: number) {
+  return Boolean(pot.moistureRecordedAt && now - new Date(pot.moistureRecordedAt).getTime() > PROBE_SILENT_MS);
+}
+
+/** The moisture to show: null when the probe has gone quiet (don't show stale values). */
+function liveMoisture(pot: Pot, now: number) {
+  return probeSilent(pot, now) ? null : pot.currentMoisture;
+}
+
+function moistureState(pot: Pot, now: number) {
+  if (probeSilent(pot, now)) return { text: "Probe not reading", tone: "text-rose-600 dark:text-rose-400", bar: "bg-slate-300 dark:bg-slate-600" };
   const m = pot.currentMoisture;
   if (m == null) return { text: "No reading", tone: "text-slate-400", bar: "bg-slate-300 dark:bg-slate-600" };
   if (m < pot.moistureOnThreshold) return { text: "Too dry", tone: "text-amber-600 dark:text-amber-400", bar: "bg-amber-500" };
@@ -106,6 +118,7 @@ function IrrigationContent() {
     refreshInterval: 5000,
   });
   const [chosenPotId, setChosenPotId] = useState<string | null>(() => searchParams.get("pot"));
+  const listNow = useNow();
   const [potQuery, setPotQuery] = useState("");
   const sortedPots = [...(pots ?? [])].sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }));
   const selectedPot = sortedPots.find((pot) => pot.id === chosenPotId) ?? sortedPots[0];
@@ -168,7 +181,8 @@ function IrrigationContent() {
             <ul className="max-h-[calc(100vh-14rem)] space-y-1 overflow-y-auto [scrollbar-width:thin]">
               {listedPots.length === 0 ? <li className="px-3 py-4 text-center text-xs text-slate-400">No pots match.</li> : null}
               {listedPots.map((pot) => {
-                const state = moistureState(pot);
+                const state = moistureState(pot, listNow);
+                const shown = liveMoisture(pot, listNow);
                 const active = pot.id === selectedPot.id;
                 return (
                   <li key={pot.id}>
@@ -193,7 +207,7 @@ function IrrigationContent() {
                         </span>
                       </span>
                       <span className="shrink-0 text-right leading-tight">
-                        <span className="block text-sm font-bold tabular-nums">{pot.currentMoisture == null ? "--" : `${pot.currentMoisture}%`}</span>
+                        <span className="block text-sm font-bold tabular-nums">{shown == null ? "--" : `${shown}%`}</span>
                         {pot.pumpState === "on" ? (
                           <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-sky-600 dark:text-sky-400">
                             <Droplets size={10} />
@@ -253,9 +267,12 @@ function PotControl({
   const valid = on < off;
   const manual = pot.irrigationMode === "MANUAL";
   const pumpOn = pot.pumpState === "on";
-  const state = moistureState(pot);
   const now = useNow();
-  const stale = Boolean(pot.moistureRecordedAt && now - new Date(pot.moistureRecordedAt).getTime() > STALE_MS);
+  const state = moistureState(pot, now);
+  const shown = liveMoisture(pot, now);
+  // Readings arrive every 5 s; a minute of silence means the probe isn't
+  // giving valid readings even if the board itself is online.
+  const stale = Boolean(pot.moistureRecordedAt && now - new Date(pot.moistureRecordedAt).getTime() > 60_000);
   const command = pot.latestCommand;
   const pending = command && ["PENDING", "SENT", "RETRYING"].includes(command.status);
   const recommended = pot.plant ? findPlantProfile(pot.plant.commonName) : undefined;
@@ -364,16 +381,16 @@ function PotControl({
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Soil moisture</p>
             <div className="mt-2 flex items-end justify-between">
               <p className="text-5xl font-black leading-none">
-                {pot.currentMoisture == null ? <span className="text-slate-300 dark:text-slate-600">--</span> : pot.currentMoisture}
-                {pot.currentMoisture == null ? null : <span className="ml-1 text-xl font-bold text-slate-400">%</span>}
+                {shown == null ? <span className="text-slate-300 dark:text-slate-600">--</span> : shown}
+                {shown == null ? null : <span className="ml-1 text-xl font-bold text-slate-400">%</span>}
               </p>
               <p className={`text-sm font-bold ${state.tone}`}>{state.text}</p>
             </div>
-            <LevelBar value={pot.currentMoisture} on={on} off={off} barClass={state.bar} />
+            <LevelBar value={shown} on={on} off={off} barClass={state.bar} />
             <p className={`mt-2 text-xs ${stale ? "font-semibold text-amber-600 dark:text-amber-400" : "text-slate-500 dark:text-slate-400"}`}>
               {pot.moistureRecordedAt
                 ? stale
-                  ? `Last reading ${timeAgo(pot.moistureRecordedAt)} — too old for automatic watering`
+                  ? `Last valid reading ${timeAgo(pot.moistureRecordedAt)} — check the probe wiring. Automatic watering is paused.`
                   : `Updated ${timeAgo(pot.moistureRecordedAt)}`
                 : "Waiting for the first sensor reading"}
             </p>
