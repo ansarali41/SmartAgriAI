@@ -122,3 +122,19 @@ test("bounded worker drain claims existing pending rows, increments attempts, an
   assert.deepEqual(result, { claimed: 2, sent: 2, retried: 0, failed: 0 });
   assert.deepEqual(rows.map((row) => [row.status, row.attemptCount]), [["SENT", 1], ["SENT", 1]]);
 });
+
+test("a stale backlog older than 6 hours is expired, not sent", async () => {
+  const expireCalls: any[] = [];
+  const store = { telegramDelivery: {
+    findMany: async () => [],
+    updateMany: async (args: any) => { if (!args.where.id) expireCalls.push(args); return { count: 3 }; },
+    findUnique: async () => null,
+  } };
+  const claimed = await claimDueTelegramDeliveries(store as never, { now });
+  assert.equal(claimed.length, 0);
+  assert.equal(expireCalls.length, 1);
+  assert.equal(expireCalls[0].where.status, "PENDING");
+  assert.equal(expireCalls[0].where.createdAt.lt.getTime(), now.getTime() - 6 * 60 * 60 * 1000);
+  assert.equal(expireCalls[0].data.status, "FAILED");
+  assert.equal(expireCalls[0].data.lastErrorCode, "EXPIRED");
+});

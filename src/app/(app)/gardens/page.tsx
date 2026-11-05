@@ -7,6 +7,7 @@ import useSWR from "swr";
 import Link from "next/link";
 import {
   ArrowRight,
+  Bell,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -16,13 +17,16 @@ import {
   EllipsisVertical,
   Eye,
   Flower2,
+  Info,
   MapPin,
+  OctagonAlert,
   Package,
   Pencil,
   Plus,
   Search,
   Trash2,
   Trees,
+  TriangleAlert,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -40,6 +44,7 @@ import {
 } from "@/components/GardenForm";
 import { SlideOver } from "@/components/SlideOver";
 import { useDismiss } from "@/components/HeaderMenus";
+import { errorMessage, useFeedback } from "@/components/Feedback";
 import { apiDelete, apiPatch, apiPost } from "@/lib/api-client";
 import { getSelectedGardenId, setSelectedGardenId } from "@/lib/selected-garden";
 
@@ -63,6 +68,8 @@ const SORTS: { value: SortKey; label: string }[] = [
 ];
 
 function deviceHealth(garden: Garden, overview?: GardenOverview): Exclude<StatusFilter, "all"> {
+  // Anything the details page would flag (dry pot, failed pump, disease…) needs attention.
+  if (overview?.alerts?.length) return "attention";
   if (garden._count.devices === 0) return "none";
   return overview && overview.deviceSummary.online === garden._count.devices ? "online" : "attention";
 }
@@ -81,6 +88,7 @@ function pageList(current: number, total: number): (number | "…")[] {
 }
 
 export default function GardensPage() {
+  const { confirm, toast } = useFeedback();
   const { data: gardens, mutate } = useSWR<Garden[]>("/api/gardens");
   const { data: gardenOverviews } = useSWR<GardenOverview[]>(
     "/api/gardens/overview",
@@ -98,8 +106,12 @@ export default function GardensPage() {
   const [sort, setSort] = useState<SortKey>("recent");
   const [requestedPage, setRequestedPage] = useState(1);
 
+  // The active garden: the one picked here, else the one saved last time, else the first.
+  const savedGardenId = getSelectedGardenId();
   const selectedGarden =
-    gardens?.find((garden) => garden.id === selectedId) ?? gardens?.[0];
+    gardens?.find((garden) => garden.id === selectedId) ??
+    gardens?.find((garden) => garden.id === savedGardenId) ??
+    gardens?.[0];
   const activeSelectedId = selectedGarden?.id ?? "";
   const overviewByGardenId = new Map(
     (gardenOverviews ?? []).map((overview) => [overview.id, overview]),
@@ -170,16 +182,6 @@ export default function GardensPage() {
   const pumpsOn = (gardenOverviews ?? []).reduce((sum, overview) => sum + overview.pumpsOn, 0);
 
   useEffect(() => {
-    if (!gardens?.length || selectedId) return;
-    const savedGardenId = getSelectedGardenId();
-    setSelectedId(
-      gardens.some((garden) => garden.id === savedGardenId)
-        ? savedGardenId!
-        : gardens[0].id,
-    );
-  }, [gardens, selectedId]);
-
-  useEffect(() => {
     if (selectedId) setSelectedGardenId(selectedId);
   }, [selectedId]);
 
@@ -206,6 +208,7 @@ export default function GardensPage() {
       } else {
         await apiPatch(`/api/gardens/${drawer}`, parseGardenForm(form));
       }
+      toast.success(drawer === "new" ? `${form.name} created` : `${form.name} saved`);
       setDrawer(null);
       mutate();
     } catch (err) {
@@ -216,16 +219,20 @@ export default function GardensPage() {
   }
 
   async function remove(garden: Garden) {
-    const confirmed = window.confirm(
-      `Delete "${garden.name}"? Its ${garden._count.pots} pots, ${garden._count.plants} plants and sensor history will be removed.`,
-    );
-    if (!confirmed) return;
+    const ok = await confirm({
+      title: `Delete “${garden.name}”?`,
+      message: `Its ${garden._count.pots} pots, ${garden._count.plants} plants, devices and all sensor history will be removed. This can't be undone.`,
+      confirmLabel: "Delete garden",
+      tone: "danger",
+    });
+    if (!ok) return;
     try {
       await apiDelete(`/api/gardens/${garden.id}`);
       if (activeSelectedId === garden.id) setSelectedId("");
       mutate();
+      toast.success(`${garden.name} deleted`);
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : "Failed to delete garden");
+      toast.error(errorMessage(err, "Failed to delete garden"));
     }
   }
 
@@ -603,13 +610,17 @@ function GardenCard({
   const status = deviceStatusSummary(garden._count.devices, overview);
   const pumpsOn = overview?.pumpsOn ?? 0;
   const detailsHref = `/gardens/${garden.id}`;
+  const alerts = overview?.alerts ?? [];
+  const critical = alerts.some((alert) => alert.severity === "critical");
 
   return (
     <article
       className={`group/card relative flex flex-col rounded-2xl border bg-white shadow-sm transition hover:shadow-md dark:bg-slate-900 ${
-        active
-          ? "border-emerald-500/60 ring-1 ring-emerald-500/30 dark:border-emerald-500/50"
-          : "border-slate-200 hover:border-slate-300 dark:border-slate-800 dark:hover:border-slate-700"
+        critical
+          ? "border-rose-400/70 ring-1 ring-rose-500/25 dark:border-rose-500/50"
+          : active
+            ? "border-emerald-500/60 ring-1 ring-emerald-500/30 dark:border-emerald-500/50"
+            : "border-slate-200 hover:border-slate-300 dark:border-slate-800 dark:hover:border-slate-700"
       }`}
     >
       <div className="flex items-start gap-3.5 p-5">
@@ -644,6 +655,24 @@ function GardenCard({
             <span className="shrink-0">{type.label}</span>
           </p>
         </div>
+        {alerts.length ? (
+          <Link
+            href={detailsHref}
+            title={`${alerts.length} ${alerts.length === 1 ? "thing needs" : "things need"} attention`}
+            className={`relative mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg ${
+              critical ? "bg-rose-50 text-rose-600 dark:bg-rose-500/10 dark:text-rose-400" : "bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-400"
+            }`}
+          >
+            <Bell size={16} />
+            <span
+              className={`absolute -right-1.5 -top-1.5 grid h-[18px] min-w-[18px] place-items-center rounded-full px-1 text-[10px] font-black text-white ring-2 ring-white dark:ring-slate-900 ${
+                critical ? "bg-rose-600" : "bg-amber-500"
+              }`}
+            >
+              {alerts.length}
+            </span>
+          </Link>
+        ) : null}
         <GardenMenu
           gardenName={garden.name}
           detailsHref={detailsHref}
@@ -667,6 +696,8 @@ function GardenCard({
         ) : null}
       </div>
 
+      {alerts.length ? <CardAlerts alerts={alerts} href={detailsHref} /> : null}
+
       <dl className="mx-5 mt-4 grid grid-cols-3 gap-2">
         <CardStat icon={Package} label="Pots" value={garden._count.pots} />
         <CardStat icon={Flower2} label="Plants" value={garden._count.plants} />
@@ -688,6 +719,38 @@ function GardenCard({
         </Link>
       </div>
     </article>
+  );
+}
+
+const ALERT_STYLE = {
+  critical: { icon: OctagonAlert, row: "bg-rose-50 text-rose-800 dark:bg-rose-500/10 dark:text-rose-200", iconClass: "text-rose-600 dark:text-rose-400" },
+  warning: { icon: TriangleAlert, row: "bg-amber-50 text-amber-800 dark:bg-amber-500/10 dark:text-amber-200", iconClass: "text-amber-600 dark:text-amber-400" },
+  info: { icon: Info, row: "bg-sky-50 text-sky-800 dark:bg-sky-500/10 dark:text-sky-200", iconClass: "text-sky-600 dark:text-sky-400" },
+} as const;
+
+/** The two most serious open alerts, with "+N more" — full list on the details page. */
+function CardAlerts({ alerts, href }: { alerts: NonNullable<GardenOverview["alerts"]>; href: string }) {
+  const shown = alerts.slice(0, 2);
+  return (
+    <div className="mx-5 mt-3 space-y-1.5">
+      {shown.map((alert) => {
+        const style = ALERT_STYLE[alert.severity];
+        return (
+          <Link key={alert.id} href={href} className={`flex items-start gap-2 rounded-lg px-2.5 py-2 text-xs transition hover:opacity-90 ${style.row}`}>
+            <style.icon size={14} className={`mt-px shrink-0 ${style.iconClass}`} />
+            <span className="min-w-0">
+              <span className="block font-bold">{alert.title}</span>
+              <span className="block truncate opacity-80">{alert.message}</span>
+            </span>
+          </Link>
+        );
+      })}
+      {alerts.length > shown.length ? (
+        <Link href={href} className="block px-1 text-xs font-semibold text-slate-500 hover:text-emerald-600 dark:text-slate-400 dark:hover:text-emerald-400">
+          +{alerts.length - shown.length} more — see all in garden details
+        </Link>
+      ) : null}
+    </div>
   );
 }
 

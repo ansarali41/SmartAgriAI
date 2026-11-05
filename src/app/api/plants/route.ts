@@ -16,7 +16,15 @@ export async function GET(req: Request) {
     orderBy: { updatedAt: "desc" },
     include: {
       garden: { select: { name: true } },
-      pot: { select: { label: true } },
+      pot: {
+        select: {
+          id: true,
+          label: true,
+          soilType: true,
+          moistureOnThreshold: true,
+          moistureOffThreshold: true,
+        },
+      },
     },
   });
   return NextResponse.json(plants);

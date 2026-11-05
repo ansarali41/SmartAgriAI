@@ -25,6 +25,8 @@
 #include <Preferences.h>
 #include <WiFiManager.h>
 #include <esp_mac.h>
+#include <esp_sleep.h>
+#include <driver/gpio.h>
 #if __has_include("config.h")
 #include "config.h"
 #endif
@@ -49,7 +51,7 @@
 #define COMMUNICATION_LOSS_FAILSAFE_MS 60000UL
 #endif
 
-#define FIRMWARE_VERSION "smartagri-2.4"
+#define FIRMWARE_VERSION "smartagri-2.5"
 #define SETUP_AP_NAME "SmartAgri-Setup"
 
 const int SOIL_PIN = 36;   // GPIO36 / VP (ADC1); safe to use while Wi-Fi is active.
@@ -253,6 +255,56 @@ void acknowledgeCommand(const char *commandId, const char *kind, bool success = 
   else if (code < 200 || code >= 300) Serial.printf("Command acknowledgement failed: %d\n", code);
 }
 
+// ---------------------------------------------------------------------------
+// Remote actions from the app: restart, reset Wi-Fi, sleep ("turn off"),
+// factory reset. Confirmed to the server first, then carried out.
+// ---------------------------------------------------------------------------
+
+bool confirmAction(const char *action) {
+  JsonDocument body;
+  body["hardwareId"] = hardwareId;
+  body["action"] = action;
+  body["kind"] = "action";
+  String payload;
+  serializeJson(body, payload);
+  int code = request("POST", "/api/iot/commands", payload, nullptr, true);
+  if (code < 200 || code >= 300) Serial.printf("Action confirmation failed: %d\n", code);
+  return code >= 200 && code < 300;
+}
+
+void runAction(const String &action) {
+  if (!confirmAction(action.c_str())) return;  // retried on the next poll
+  setPump(false);
+  digitalWrite(LED_PIN, LOW);
+  Serial.printf("Remote action: %s\n", action.c_str());
+  delay(300);
+
+  if (action == "RESTART") {
+    ESP.restart();
+  } else if (action == "RESET_WIFI") {
+    // Keeps the device key: after choosing a new Wi-Fi it's still in your account.
+    WiFiManager wm;
+    wm.resetSettings();
+    ESP.restart();
+  } else if (action == "FACTORY_RESET") {
+    WiFiManager wm;
+    wm.resetSettings();
+    config.clear();
+    commandStore.clear();
+    ESP.restart();
+  } else if (action == "SLEEP") {
+    // "Turn off": deep sleep with the relay held OFF. Press BOOT (or EN) to wake.
+    digitalWrite(RELAY_PIN, RELAY_OFF_LEVEL);
+    gpio_hold_en((gpio_num_t)RELAY_PIN);
+    gpio_deep_sleep_hold_en();
+    WiFi.disconnect(true);
+    esp_sleep_enable_ext0_wakeup((gpio_num_t)SETUP_BUTTON_PIN, 0);
+    Serial.println("Sleeping - press BOOT or EN to wake.");
+    Serial.flush();
+    esp_deep_sleep_start();
+  }
+}
+
 void processPendingCommands() {
   String response;
   int code = request("GET", "/api/iot/commands?deviceId=" + hardwareId, "", &response, true);
@@ -265,6 +317,12 @@ void processPendingCommands() {
   JsonDocument doc;
   if (deserializeJson(doc, response)) {
     Serial.println("Invalid command response");
+    return;
+  }
+
+  const char *action = doc["action"] | "";
+  if (action[0]) {
+    runAction(String(action));
     return;
   }
 
@@ -426,6 +484,9 @@ bool bootHeldFor(unsigned long ms) {
 
 void setup() {
   // Preload the OFF level before enabling the pin so the pump never twitches on boot.
+  // Coming out of sleep: release the relay pin that was held OFF.
+  gpio_hold_dis((gpio_num_t)RELAY_PIN);
+  gpio_deep_sleep_hold_dis();
   digitalWrite(RELAY_PIN, RELAY_OFF_LEVEL);
   pinMode(RELAY_PIN, OUTPUT);
   pinMode(SETUP_BUTTON_PIN, INPUT_PULLUP);

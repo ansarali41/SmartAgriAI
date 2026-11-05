@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
-import { getPotAnalytics, resolveAnalyticsDateRange } from "@/lib/pot-analytics";
+import { resolveAnalyticsDateRange } from "@/lib/pot-analytics";
+import { getPotAnalyticsOverview } from "@/lib/pot-analytics-overview";
 
 export async function GET(req: Request) {
   const userId = await requireUser();
@@ -12,7 +13,7 @@ export async function GET(req: Request) {
   if (!gardenId || !potId) return NextResponse.json({ error: "gardenId and potId are required" }, { status: 400 });
   const dateRange = resolveAnalyticsDateRange(range, query.get("from"), query.get("to"));
   if ("error" in dateRange) return NextResponse.json({ error: dateRange.error }, { status: 400 });
-  const analytics = await getPotAnalytics(userId, gardenId, potId, dateRange.start, dateRange.end);
+  const analytics = await getPotAnalyticsOverview(userId, gardenId, potId, dateRange.start, dateRange.end);
   if (!analytics) return NextResponse.json({ error: "Pot not found" }, { status: 404 });
   return NextResponse.json(analytics);
 }

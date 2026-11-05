@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { getDeviceCommandSettings } from "@/lib/device-command-settings";
 import { formatPumpAcknowledgementNotification, formatPumpFailureNotification } from "@/lib/business-notifications";
 import { enqueueTelegramDelivery } from "@/lib/telegram-delivery-enqueue";
+import { createAppNotification, potActionUrl } from "@/lib/notify";
 
 export const pumpStateToCommand = (state: IrrigationStatus): DeviceCommandType => state === "on" ? "PUMP_ON" : "PUMP_OFF";
 export const commandToPumpState = (command: DeviceCommandType): IrrigationStatus => command === "PUMP_ON" ? "on" : "off";
@@ -81,7 +82,8 @@ async function failCommand(command: DeviceCommand, error: string, now: Date) {
     const changed = await tx.deviceCommand.updateMany({ where: { id: command.id, status: "SENT", executionResultAt: null }, data: { status: "FAILED", error, processedAt: now, executionResultAt: now } });
     if (!changed.count) return command;
     const pot = await tx.pot.findUnique({ where: { id: command.potId }, select: { pumpState: true, label: true, garden: { select: { name: true } } } });
-    if (pot) { await tx.pumpEvent.create({ data: { userId: command.userId, gardenId: command.gardenId, potId: command.potId, deviceId: command.deviceId, commandId: command.id, previousState: pot.pumpState, newState: commandToPumpState(command.command), source: command.mode, status: "FAILED", failureReason: error, occurredAt: now } }); await enqueueTelegramDelivery(tx, { userId: command.userId, eventKey: `pump:${command.id}:failed`, eventType: "PUMP_FAILED", eventRef: command.id, messageText: formatPumpFailureNotification({ gardenName: pot.garden.name, potLabel: pot.label, command: command.command, occurredAt: now, error }) }); }
+    if (pot) { await tx.pumpEvent.create({ data: { userId: command.userId, gardenId: command.gardenId, potId: command.potId, deviceId: command.deviceId, commandId: command.id, previousState: pot.pumpState, newState: commandToPumpState(command.command), source: command.mode, status: "FAILED", failureReason: error, occurredAt: now } }); await enqueueTelegramDelivery(tx, { userId: command.userId, eventKey: `pump:${command.id}:failed`, eventType: "PUMP_FAILED", eventRef: command.id, messageText: formatPumpFailureNotification({ gardenName: pot.garden.name, potLabel: pot.label, command: command.command, occurredAt: now, error }) });
+      await createAppNotification(tx, { userId: command.userId, gardenId: command.gardenId, potId: command.potId, type: "alert", severity: "high", title: `Pump didn't turn ${command.command === "PUMP_ON" ? "on" : "off"} — ${pot.label}`, message: `${pot.garden.name}: the device couldn't apply the command (${error}). Check the board and relay, then try again.`, actionUrl: potActionUrl(command.gardenId, command.potId) }); }
     return { ...command, status: "FAILED" as const, executionResultAt: now };
   });
   return { command: updated, notification: { success: false as const, occurredAt: now } };
@@ -98,6 +100,10 @@ async function executeCommand(command: DeviceCommand, now: Date) {
     await tx.irrigationEvent.create({ data: { userId: command.userId, gardenId: command.gardenId, potId: command.potId, mode: command.mode === "MANUAL" ? "manual" : "automatic", status: state, manualOverride: command.mode === "MANUAL", reason: `${command.mode} command ${command.command} executed`, soilMoisture: command.decisionMoisture, onThreshold: command.onThreshold ?? pot.moistureOnThreshold, offThreshold: command.offThreshold ?? pot.moistureOffThreshold, decision: command.command, outcome: "EXECUTED" } });
     await tx.pumpEvent.create({ data: { userId: command.userId, gardenId: command.gardenId, potId: command.potId, deviceId: command.deviceId, commandId: command.id, previousState: pot.pumpState, newState: state, source: command.mode, status: "ACKNOWLEDGED", occurredAt: now } });
     await enqueueTelegramDelivery(tx, { userId: command.userId, eventKey: `pump:${command.id}:acknowledged`, eventType: "PUMP_ACKNOWLEDGED", eventRef: command.id, messageText: formatPumpAcknowledgementNotification({ gardenName: pot.garden.name, potLabel: pot.label, command: command.command, mode: command.mode, occurredAt: now, decisionMoisture: command.decisionMoisture }) });
+    // Automatic watering is worth knowing about; manual on/off was the user's own action.
+    if (command.mode === "AUTO" && command.command === "PUMP_ON") {
+      await createAppNotification(tx, { userId: command.userId, gardenId: command.gardenId, potId: command.potId, type: "info", severity: "low", title: `Watering started — ${pot.label}`, message: `${pot.garden.name}: soil was ${command.decisionMoisture != null ? `${command.decisionMoisture}%` : "dry"}, below ${command.onThreshold ?? pot.moistureOnThreshold}%. The pump turned on automatically.`, actionUrl: potActionUrl(command.gardenId, command.potId) });
+    }
     return true;
   });
   return { command: { ...command, status: "ACKNOWLEDGED" as const, executionResultAt: now }, notification: result ? { success: true as const, occurredAt: now } : null };

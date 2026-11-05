@@ -4,6 +4,7 @@
 import useSWR from "swr";
 import { Bell, Check } from "lucide-react";
 import { Badge, Card, IconButton, PageHeader, severityTone } from "@/components/ui";
+import { errorMessage, useFeedback } from "@/components/Feedback";
 import { apiPatch } from "@/lib/api-client";
 
 interface Notification {
@@ -28,6 +29,7 @@ interface TelegramDeliveryHistory {
 }
 
 export default function NotificationsPage() {
+  const { toast } = useFeedback();
   const { data, mutate } = useSWR<Notification[]>("/api/notifications", {
     refreshInterval: 15000,
   });
@@ -36,8 +38,13 @@ export default function NotificationsPage() {
   });
 
   async function markAll() {
-    await apiPatch("/api/notifications", { all: true });
-    mutate();
+    try {
+      await apiPatch("/api/notifications", { all: true });
+      mutate();
+      toast.success("All notifications marked as read");
+    } catch (err) {
+      toast.error(errorMessage(err, "Couldn't update notifications"));
+    }
   }
   async function markOne(id: string) {
     await apiPatch("/api/notifications", { id });

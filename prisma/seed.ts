@@ -1,5 +1,12 @@
+// Starter data: one user, two gardens, two pots in each (every pot has a
+// plant). No devices — pair a real ESP32 from the Sensors page.
+//
+// Won't overwrite an existing account: if the user already exists it stops.
+// To wipe that user (and everything they own) and start over, run with
+// SEED_RESET=true. It never touches any other account.
 import { PrismaClient } from "@prisma/client";
 import crypto from "node:crypto";
+import { findPlantProfile } from "../src/lib/plant-catalog";
 
 const prisma = new PrismaClient();
 
@@ -9,169 +16,114 @@ function hashPassword(password: string, salt?: string) {
   const passwordHash = crypto.scryptSync(password, passwordSalt, 64).toString("hex");
   return { passwordHash, passwordSalt };
 }
-function hashDeviceKey(plain: string) {
-  return crypto.createHash("sha256").update(plain).digest("hex");
-}
 
-const DEMO_EMAIL = "demo@smartagri.ai";
+const DEMO_EMAIL = "sanzida@smartagri.ai";
+const DEMO_NAME = "Sanzida Zinia";
 // Seed credentials are generated for each run unless supplied explicitly for
 // local development. They are never production credentials.
 const DEMO_PASSWORD = process.env.DEMO_PASSWORD ?? crypto.randomBytes(18).toString("base64url");
-const DEMO_DEVICE_KEY = process.env.DEMO_DEVICE_KEY ?? `sk_dev_${crypto.randomBytes(24).toString("hex")}`;
-const DEMO_DEVICE_KEY_2 = process.env.DEMO_DEVICE_KEY_2 ?? `sk_dev_${crypto.randomBytes(24).toString("hex")}`;
-const DEMO_HARDWARE_ID = "ESP32-GARDEN-01";
-const DEMO_HARDWARE_ID_2 = "ESP32-GARDEN-02";
+
+const GARDENS = [
+  {
+    name: "Rooftop Garden",
+    type: "outdoor" as const,
+    location: "Dhanmondi, Dhaka",
+    lat: 23.7465,
+    lng: 90.376,
+    pots: [
+      { plant: "Tomato", variety: "Roma", stage: "fruiting" as const, soilType: "loam" as const, position: "South corner", daysAgo: 60 },
+      { plant: "Chili", variety: "Bombai morich", stage: "flowering" as const, soilType: "loam" as const, position: "Near the water tank", daysAgo: 45 },
+    ],
+  },
+  {
+    name: "Balcony Garden",
+    type: "indoor" as const,
+    location: "Uttara Sector 7, Dhaka",
+    lat: 23.8697,
+    lng: 90.3984,
+    pots: [
+      { plant: "Money plant", variety: "Golden pothos", stage: "mature" as const, soilType: "potting_mix" as const, position: "Living-room window", daysAgo: 120 },
+      { plant: "Tulsi", variety: "", stage: "vegetative" as const, soilType: "loam" as const, position: "Balcony rail", daysAgo: 30 },
+    ],
+  },
+];
 
 async function main() {
   console.log("Seeding SmartAgri demo data…");
-
   const { passwordHash, passwordSalt } = hashPassword(DEMO_PASSWORD);
 
-  // Clean prior demo user (cascade clears everything it owns).
-  await prisma.user.deleteMany({ where: { email: DEMO_EMAIL } });
+  const existing = await prisma.user.findUnique({ where: { email: DEMO_EMAIL }, select: { id: true } });
+  if (existing) {
+    if (process.env.SEED_RESET !== "true") {
+      console.log(`\n${DEMO_EMAIL} already exists — nothing changed.`);
+      console.log("To DELETE that account and everything it owns and seed it again, run:  SEED_RESET=true npm run db:seed");
+      return;
+    }
+    // Cascade clears everything this user owns. No other account is touched.
+    await prisma.user.delete({ where: { id: existing.id } });
+  }
 
   const user = await prisma.user.create({
     data: {
       email: DEMO_EMAIL,
       passwordHash,
       passwordSalt,
-      userName: "Demo Farmer",
-      irrigationConfig: {
-        create: { thresholdPercent: 30, manualOverride: false, currentStatus: "off" },
-      },
+      userName: DEMO_NAME,
+      irrigationConfig: { create: { thresholdPercent: 30, manualOverride: false, currentStatus: "off" } },
     },
   });
 
-  const garden = await prisma.garden.create({
-    data: {
-      userId: user.id,
-      name: "North Field",
-      type: "outdoor",
-      location: "Dhaka",
-    },
-  });
-
-  const secondGarden = await prisma.garden.create({
-    data: {
-      userId: user.id,
-      name: "South Greenhouse",
-      type: "greenhouse",
-      location: "Dhaka",
-    },
-  });
-
-  const [pot1, pot2, pot3] = await Promise.all([
-    prisma.pot.create({
-      data: {
-        id: "POT-01",
-        userId: user.id,
-        gardenId: garden.id,
-        label: "POT-01",
-        soilType: "loam",
-      },
-    }),
-    prisma.pot.create({
-      data: {
-        id: "POT-02",
-        userId: user.id,
-        gardenId: garden.id,
-        label: "POT-02",
-        soilType: "potting_mix",
-      },
-    }),
-    prisma.pot.create({
-      data: {
-        id: "POT-03",
-        userId: user.id,
-        gardenId: garden.id,
-        label: "POT-03",
-        soilType: "sandy",
-      },
-    }),
-  ]);
-
-  await prisma.pot.create({
-    data: {
-      id: "POT-04",
-      userId: user.id,
-      gardenId: secondGarden.id,
-      label: "POT-04",
-      soilType: "loam",
-    },
-  });
-
-  await prisma.plant.create({
-    data: {
-      userId: user.id,
-      gardenId: garden.id,
-      potId: pot1.id,
-      commonName: "Tomato",
-      variety: "Roma",
-      growthStage: "vegetative",
-      healthStatus: "healthy",
-      plantedAt: new Date("2026-05-01"),
-      threshold: {
-        create: {
-          soilMoistureMin: 35,
-          soilMoistureMax: 70,
-          tempDayMin: 18,
-          tempDayMax: 32,
-          humidityMin: 45,
-          humidityMax: 80,
-        },
-      },
-    },
-  });
-
-  const device = await prisma.device.create({
-    data: {
-      userId: user.id,
-      gardenId: garden.id,
-      hardwareId: DEMO_HARDWARE_ID,
-      name: "Field node 1",
-      type: "esp32_node",
-      apiKeyHash: hashDeviceKey(DEMO_DEVICE_KEY),
-    },
-  });
-
-  await prisma.device.create({
-    data: {
-      userId: user.id,
-      gardenId: secondGarden.id,
-      hardwareId: DEMO_HARDWARE_ID_2,
-      name: "Greenhouse node 1",
-      type: "esp32_node",
-      apiKeyHash: hashDeviceKey(DEMO_DEVICE_KEY_2),
-    },
-  });
-
-  // Seed a few hours of readings so charts and health score have history.
   const now = Date.now();
-  const readings = [];
-  for (let i = 24; i >= 0; i--) {
-    const recordedAt = new Date(now - i * 10 * 60 * 1000); // every 10 min
-    const moisture = 45 + Math.round(Math.sin(i / 3) * 12);
-    const temperature = 27 + Math.round(Math.cos(i / 4) * 3);
-    const humidity = 65 + Math.round(Math.sin(i / 5) * 8);
-    for (const [metric, value, unit] of [
-      ["soil_moisture", moisture, "%"],
-      ["temperature", temperature, "C"],
-      ["humidity", humidity, "%"],
-    ] as const) {
-      readings.push({
-        userId: user.id,
-        gardenId: garden.id,
-        potId: metric === "soil_moisture" ? pot1.id : null,
-        deviceId: device.id,
-        hardwareId: device.hardwareId,
-        metric,
-        value,
-        unit,
-        recordedAt,
+  let potNumber = 0;
+
+  for (const spec of GARDENS) {
+    const garden = await prisma.garden.create({
+      data: { userId: user.id, name: spec.name, type: spec.type, location: spec.location, lat: spec.lat, lng: spec.lng },
+    });
+
+    for (const potSpec of spec.pots) {
+      const profile = findPlantProfile(potSpec.plant);
+      if (!profile) throw new Error(`"${potSpec.plant}" is not in the plant catalog`);
+      potNumber += 1;
+      const pot = await prisma.pot.create({
+        data: {
+          userId: user.id,
+          gardenId: garden.id,
+          number: potNumber,
+          label: `POT-${potNumber}`,
+          soilType: potSpec.soilType,
+          position: potSpec.position,
+          irrigationMode: "AUTO",
+          moistureOnThreshold: profile.moisture[0],
+          moistureOffThreshold: profile.moisture[1],
+        },
+      });
+      await prisma.plant.create({
+        data: {
+          userId: user.id,
+          gardenId: garden.id,
+          potId: pot.id,
+          commonName: profile.name,
+          scientificName: profile.scientificName,
+          variety: potSpec.variety || undefined,
+          growthStage: potSpec.stage,
+          healthStatus: "healthy",
+          plantedAt: new Date(now - potSpec.daysAgo * 86_400_000),
+          threshold: {
+            create: {
+              soilMoistureMin: profile.moisture[0],
+              soilMoistureMax: profile.moisture[1],
+              tempDayMin: profile.tempC[0],
+              tempDayMax: profile.tempC[1],
+              humidityMin: profile.humidity[0],
+              humidityMax: profile.humidity[1],
+            },
+          },
+        },
       });
     }
+
   }
-  await prisma.reading.createMany({ data: readings });
 
   await prisma.notification.create({
     data: {
@@ -179,17 +131,13 @@ async function main() {
       type: "info",
       severity: "low",
       title: "Welcome to SmartAgri",
-      message: "Your demo farm is ready. Connect an ESP32 or run the simulator to see live data.",
+      message: "Your gardens are ready: two gardens with two pots each. Pair an ESP32 from the Sensors page to see live soil readings.",
     },
   });
 
   console.log("\nSeed complete ✓");
-  console.log("  Login:        ", DEMO_EMAIL, "/", DEMO_PASSWORD);
-  console.log("  Device key:   ", DEMO_DEVICE_KEY);
-  console.log("  Hardware ID:  ", DEMO_HARDWARE_ID);
-  console.log("  Device key 2: ", DEMO_DEVICE_KEY_2);
-  console.log("  Hardware ID 2:", DEMO_HARDWARE_ID_2);
-  console.log("  Pots:         ", [pot1.id, pot2.id, pot3.id].join(", "));
+  console.log("  Login:  ", DEMO_EMAIL, "/", DEMO_PASSWORD);
+  console.log("  Gardens: ", GARDENS.map((g) => `${g.name} (${g.pots.map((p) => p.plant).join(", ")})`).join(" · "));
 }
 
 main()

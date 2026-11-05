@@ -3,6 +3,7 @@
 import { prisma } from "@/lib/db";
 import { generateDeviceKey } from "@/lib/device-key";
 import { KEY_DELIVERY_TTL_MS } from "@/lib/device-pairing";
+import { createAppNotification } from "@/lib/notify";
 
 export interface ClaimTarget {
   hardwareId: string;
@@ -11,6 +12,15 @@ export interface ClaimTarget {
   gardenId: string | null;
   potId?: string | null;
   name: string;
+}
+
+/** One sensor per pot: the device already connected to this pot, if it isn't `deviceId`. */
+export async function otherDeviceOnPot(potId: string, deviceId?: string | null) {
+  const mapping = await prisma.devicePotMapping.findFirst({
+    where: { potId, ...(deviceId ? { deviceId: { not: deviceId } } : {}) },
+    select: { device: { select: { name: true } } },
+  });
+  return mapping?.device.name ?? null;
 }
 
 /** Returns an error message if the user can't claim this board into that garden/pot. */
@@ -26,6 +36,9 @@ export async function claimTargetError(target: ClaimTarget) {
       select: { id: true },
     });
     if (!pot) return "Pot not found in this garden";
+    const existing = await prisma.device.findUnique({ where: { hardwareId: target.hardwareId }, select: { id: true } });
+    const occupant = await otherDeviceOnPot(target.potId, existing?.id);
+    if (occupant) return `This pot already has a sensor (${occupant}). Disconnect it first.`;
   }
   const existing = await prisma.device.findUnique({ where: { hardwareId: target.hardwareId }, select: { userId: true } });
   if (existing && existing.userId !== target.userId) return "This board is registered to another account.";
@@ -73,6 +86,18 @@ export async function completeClaim(target: ClaimTarget, { deliverNow }: { deliv
         keyExpiresAt: deliverNow ? null : new Date(now.getTime() + KEY_DELIVERY_TTL_MS),
         confirmRequestedAt: null,
       },
+    });
+    await createAppNotification(tx, {
+      userId: target.userId,
+      gardenId: target.gardenId,
+      potId: target.potId ?? null,
+      type: "system",
+      severity: "low",
+      title: existing ? `${saved.name} reconnected` : `New device added: ${saved.name}`,
+      message: target.potId
+        ? "It's connected to a pot and will start sending soil readings in a few seconds."
+        : "It isn't watching a pot yet — connect it to one from the Pots page.",
+      actionUrl: "/sensors",
     });
     return saved;
   });

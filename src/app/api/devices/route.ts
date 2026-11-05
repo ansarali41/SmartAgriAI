@@ -6,6 +6,7 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { requireUser } from "@/lib/api-auth";
 import { prisma } from "@/lib/db";
+import { otherDeviceOnPot } from "@/lib/device-claim";
 import { generateDeviceKey } from "@/lib/device-key";
 import { getDeviceConnectionStatus } from "@/lib/device-status";
 
@@ -81,6 +82,10 @@ export async function POST(req: Request) {
       });
       if (!pot) {
         return NextResponse.json({ error: "Pot not found in this garden" }, { status: 400 });
+      }
+      const occupant = await otherDeviceOnPot(potId);
+      if (occupant) {
+        return NextResponse.json({ error: `This pot already has a sensor (${occupant}). Disconnect it first.` }, { status: 409 });
       }
     }
     const { plain, hash } = generateDeviceKey();

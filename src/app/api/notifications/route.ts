@@ -3,10 +3,13 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireUser } from "@/lib/api-auth";
 import { prisma } from "@/lib/db";
+import { sweepUserNotifications } from "@/lib/app-notifications";
 
 export async function GET() {
   const gate = await requireUser();
   if (gate instanceof NextResponse) return gate;
+  // Pick up conditions (dry pots, silent probes, offline boards) before listing.
+  await sweepUserNotifications(gate).catch((error) => console.error("Notification sweep failed:", error));
   const notifications = await prisma.notification.findMany({
     where: { userId: gate },
     orderBy: { createdAt: "desc" },

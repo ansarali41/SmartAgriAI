@@ -43,7 +43,7 @@ npm run db:seed        # demo user, garden, pot, plant, device, sample readings
 The seed prints the demo credentials:
 
 ```
-Login:        demo@smartagri.ai / password123
+Login:        sanzida@smartagri.ai / password123
 Device key:   sk_dev_demo_esp32_key_0001
 Hardware ID:  esp32-001
 ```
@@ -101,7 +101,7 @@ npm run simulate
 ```
 
 Then open **http://localhost:3000**, click **Sign in**, and use
-`demo@smartagri.ai` / `password123`.
+`sanzida@smartagri.ai` / `password123`.
 
 ---
 
@@ -196,7 +196,7 @@ CSRF=$(curl -s -c $JAR http://localhost:3000/api/auth/csrf \
 curl -s -b $JAR -c $JAR -X POST http://localhost:3000/api/auth/callback/credentials \
   -H "Content-Type: application/x-www-form-urlencoded" \
   --data-urlencode "csrfToken=$CSRF" \
-  --data-urlencode "email=demo@smartagri.ai" \
+  --data-urlencode "email=sanzida@smartagri.ai" \
   --data-urlencode "password=password123" -o /dev/null
 curl -s -b $JAR http://localhost:3000/api/auth/session   # confirm logged in
 ```

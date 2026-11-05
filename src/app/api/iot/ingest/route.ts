@@ -12,6 +12,7 @@ import { decidePotIrrigation } from "@/lib/irrigation";
 import { formatDeviceRecoveredNotification } from "@/lib/business-notifications";
 import { enqueueTelegramDelivery } from "@/lib/telegram-delivery-enqueue";
 import { deviceRecoveryEventKey } from "@/lib/device-monitoring";
+import { createAppNotification } from "@/lib/notify";
 import { pickPotForReading } from "@/lib/device-pot";
 import type { Metric, Prisma } from "@prisma/client";
 
@@ -111,30 +112,25 @@ async function resolvePotId(
       throw new Error(`Invalid pot/device combination for potId ${input.potId}`);
     }
 
-    await prisma.devicePotMapping.upsert({ where: { deviceId_potId: { deviceId: device.id, potId: pot.id } }, update: {}, create: { deviceId: device.id, potId: pot.id } });
+    // Readings may name a pot (multi-pot nodes, the simulator), but only a pot
+    // the user connected this device to in the app. Never link automatically.
+    const connected = await prisma.devicePotMapping.findUnique({
+      where: { deviceId_potId: { deviceId: device.id, potId: pot.id } },
+      select: { id: true },
+    });
+    if (!connected) {
+      throw new Error(`potId ${input.potId} isn't connected to this device. Connect it to the pot in the app first.`);
+    }
     return pot.id;
   }
 
-  const [mappings, pots] = await Promise.all([
-    prisma.devicePotMapping.findMany({
-      where: { deviceId: device.id, pot: { userId: device.userId, gardenId: device.gardenId } },
-      select: { potId: true },
-      take: 2,
-    }),
-    prisma.pot.findMany({
-      where: { userId: device.userId, gardenId: device.gardenId, status: "active" },
-      select: { id: true },
-      take: 2,
-    }),
-  ]);
-  const potId = pickPotForReading({
-    mappedPotIds: mappings.map((mapping) => mapping.potId),
-    gardenPotIds: pots.map((pot) => pot.id),
+  const mappings = await prisma.devicePotMapping.findMany({
+    where: { deviceId: device.id, pot: { userId: device.userId, gardenId: device.gardenId } },
+    select: { potId: true },
+    take: 2,
   });
-  if (potId) {
-    await prisma.devicePotMapping.upsert({ where: { deviceId_potId: { deviceId: device.id, potId } }, update: {}, create: { deviceId: device.id, potId } });
-    return potId;
-  }
+  const potId = pickPotForReading({ mappedPotIds: mappings.map((mapping) => mapping.potId) });
+  if (potId) return potId;
   throw new Error("potId is required for soil moisture readings: connect this device to one pot or send potId");
 }
 
@@ -292,6 +288,8 @@ export async function POST(req: Request) {
       try {
         potId = await resolvePotId(input, device);
       } catch (error) {
+        // Still online, just not connected to a pot: keep it from looking offline.
+        await prisma.device.update({ where: { id: device.id }, data: { lastSeenAt: new Date(), status: "ONLINE" } });
         return NextResponse.json(
           { error: error instanceof Error ? error.message : "Invalid pot" },
           { status: 400 },
@@ -401,6 +399,14 @@ export async function POST(req: Request) {
           eventType: "DEVICE_RECOVERED",
           eventRef: device.id,
           messageText: formatDeviceRecoveredNotification({ deviceName: device.name, gardenName: device.garden.name, receivedAt }),
+        });
+        await createAppNotification(tx, {
+          userId: device.userId,
+          type: "info",
+          severity: "low",
+          title: `${device.name} is back online`,
+          message: `${device.name} in ${device.garden.name} is sending data again.`,
+          actionUrl: "/sensors",
         });
       } else if (recovered.count === 0) {
         // Valid, authenticated telemetry is a successful backend receipt.

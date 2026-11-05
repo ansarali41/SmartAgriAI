@@ -6,6 +6,7 @@ import { useState } from "react";
 import useSWR from "swr";
 import { Check, Copy, Cpu, Flower2, KeyRound, Leaf, Package, Sprout, Sun, Thermometer } from "lucide-react";
 import { Input } from "@/components/Input";
+import { DatePicker } from "@/components/DatePicker";
 import { SlideOver } from "@/components/SlideOver";
 import { DEVICE_TYPE_LABELS } from "@/components/device-ui";
 import { apiPatch, apiPost } from "@/lib/api-client";
@@ -18,6 +19,17 @@ import {
   type SoilType,
 } from "@/lib/plant-catalog";
 
+const CATEGORY_ORDER = ["Indoor", "Flower", "Herb", "Vegetable", "Fruit"];
+/** Suggestions grouped by type: indoor & balcony plants first. */
+const SORTED_CATALOG = [...PLANT_CATALOG].sort(
+  (a, b) => CATEGORY_ORDER.indexOf(a.category) - CATEGORY_ORDER.indexOf(b.category) || a.name.localeCompare(b.name),
+);
+
+/** Text shown beside a suggestion, e.g. "Indoor · Pothos, Mani plant". */
+function catalogHint(plant: PlantProfile) {
+  return [plant.category, plant.aliases?.join(", ")].filter(Boolean).join(" · ");
+}
+
 const GROWTH_STAGES = ["seedling", "vegetative", "flowering", "fruiting", "mature"] as const;
 
 const DEVICE_TYPES = Object.entries(DEVICE_TYPE_LABELS).map(([value, label]) => ({ value, label }));
@@ -29,14 +41,6 @@ const primaryButton =
 const secondaryButton =
   "rounded-lg border border-slate-300 px-4 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800";
 
-/** Next free label in the POT-01, POT-02 … series. */
-function nextPotLabel(existing: string[]) {
-  const taken = new Set(existing.map((label) => label.toUpperCase()));
-  for (let n = existing.length + 1; ; n++) {
-    const label = `POT-${String(n).padStart(2, "0")}`;
-    if (!taken.has(label)) return label;
-  }
-}
 
 interface PlantingForm {
   plantName: string;
@@ -51,13 +55,14 @@ interface PlantingForm {
   stopAt: string;
 }
 
-function blankPlanting(existingLabels: string[]): PlantingForm {
+/** The name starts empty: the server then names the pot after its serial (POT-4). */
+function blankPlanting(): PlantingForm {
   return {
     plantName: "",
     variety: "",
     growthStage: "seedling",
     plantedAt: "",
-    label: nextPotLabel(existingLabels),
+    label: "",
     soilType: "loam",
     sizeCm: "",
     position: "",
@@ -66,11 +71,21 @@ function blankPlanting(existingLabels: string[]): PlantingForm {
   };
 }
 
-export interface GardenDeviceOption {
+interface UserDevice {
   id: string;
   name: string;
   status: string;
+  gardenId: string | null;
+  garden: { name: string } | null;
+  pots: { id: string; label: string }[];
 }
+
+const STATUS_DOT: Record<string, string> = {
+  ONLINE: "bg-emerald-500",
+  STALE: "bg-amber-500",
+  OFFLINE: "bg-rose-500",
+  NEVER_SEEN: "bg-slate-400",
+};
 
 export function AddPlantingPanel({
   open,
@@ -78,7 +93,6 @@ export function AddPlantingPanel({
   gardenId,
   gardenName,
   existingPotLabels,
-  devices,
   onCreated,
 }: {
   open: boolean;
@@ -86,8 +100,6 @@ export function AddPlantingPanel({
   gardenId: string;
   gardenName: string;
   existingPotLabels: string[];
-  /** Devices already in this garden that the new pot can use. */
-  devices: GardenDeviceOption[];
   onCreated: () => void;
 }) {
   const [newDevice, setNewDevice] = useState<{ name: string; hardwareId: string; key: string } | null>(null);
@@ -132,7 +144,6 @@ export function AddPlantingPanel({
         <PlantingFields
           gardenId={gardenId}
           existingPotLabels={existingPotLabels}
-          devices={devices}
           onCreated={(device) => {
             onCreated();
             if (device) setNewDevice(device);
@@ -149,21 +160,30 @@ type DeviceChoice = "none" | "existing" | "new";
 function PlantingFields({
   gardenId,
   existingPotLabels,
-  devices,
   onCreated,
 }: {
   gardenId: string;
   existingPotLabels: string[];
-  devices: GardenDeviceOption[];
   onCreated: (newDevice: { name: string; hardwareId: string; key: string } | null) => void;
 }) {
-  const [form, setForm] = useState<PlantingForm>(() => blankPlanting(existingPotLabels));
+  const [form, setForm] = useState<PlantingForm>(() => blankPlanting());
+  const { data: allPots } = useSWR<{ number: number }[]>("/api/pots");
+  const nextNumber = allPots ? Math.max(0, ...allPots.map((pot) => pot.number)) + 1 : null;
+  const labelTaken = existingPotLabels.some((label) => label.toLowerCase() === form.label.trim().toLowerCase());
   const [deviceChoice, setDeviceChoice] = useState<DeviceChoice>("none");
-  const [existingDeviceId, setExistingDeviceId] = useState(devices[0]?.id ?? "");
+  const [pickedDeviceId, setPickedDeviceId] = useState("");
   const [newDevice, setNewDevice] = useState({ name: "", hardwareId: "", type: "esp32_node" });
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const { data: plants } = useSWR<{ commonName: string; gardenId: string }[]>("/api/plants");
+  const { data: allDevices } = useSWR<UserDevice[]>("/api/devices", { refreshInterval: 5000 });
+
+  // One sensor per pot: a board already watching a pot isn't available.
+  // This garden's boards first, then ones not in a garden, then other gardens'.
+  const rank = (device: UserDevice) => (device.gardenId === gardenId ? 0 : device.gardenId === null ? 1 : 2);
+  const freeDevices = (allDevices ?? []).filter((device) => device.pots.length === 0).sort((a, b) => rank(a) - rank(b));
+  const busyCount = (allDevices ?? []).length - freeDevices.length;
+  const existingDeviceId = freeDevices.some((device) => device.id === pickedDeviceId) ? pickedDeviceId : (freeDevices[0]?.id ?? "");
 
   const profile = findPlantProfile(form.plantName);
   const name = form.plantName.trim();
@@ -228,7 +248,7 @@ function PlantingFields({
           plantedAt: form.plantedAt ? new Date(form.plantedAt).toISOString() : undefined,
         },
         pot: {
-          label: form.label.trim(),
+          label: form.label.trim() || undefined,
           soilType: form.soilType,
           sizeCm: form.sizeCm ? Number(form.sizeCm) : undefined,
           position: form.position.trim() || undefined,
@@ -267,9 +287,9 @@ function PlantingFields({
             className={fieldClass}
           />
           <datalist id="plant-catalog">
-            {PLANT_CATALOG.map((plant) => (
+            {SORTED_CATALOG.map((plant) => (
               <option key={plant.name} value={plant.name}>
-                {plant.aliases?.join(", ")}
+                {catalogHint(plant)}
               </option>
             ))}
           </datalist>
@@ -323,14 +343,24 @@ function PlantingFields({
             </select>
           </label>
         </div>
-        <Input label="Planted on (optional)" value={form.plantedAt} onChange={(v) => set("plantedAt", v)} type="date" />
+        <DatePicker label="Planted on (optional)" value={form.plantedAt} onChange={(v) => set("plantedAt", v)} max="today" placeholder="Not set" />
       </section>
 
       {/* 2. Pot */}
       <section className="space-y-4 border-t border-slate-100 pt-5 dark:border-slate-800" aria-label="Pot">
         <StepHeading step={2} icon={Package} title="Pot" />
         <div className="grid grid-cols-2 gap-3">
-          <Input label="Pot label" value={form.label} onChange={(v) => set("label", v)} required />
+          <div>
+            <Input
+              label="Pot name (optional)"
+              value={form.label}
+              onChange={(v) => set("label", v)}
+              placeholder={nextNumber ? `POT-${nextNumber}` : "POT-…"}
+            />
+            <p className={`mt-1 text-[11px] ${labelTaken ? "font-semibold text-rose-600" : "text-slate-400"}`}>
+              {labelTaken ? "A pot in this garden already has this name." : `Leave empty to use its number${nextNumber ? `, POT-${nextNumber}` : ""}.`}
+            </p>
+          </div>
           <label className="block">
             <span className="mb-1 flex items-center justify-between text-sm font-bold text-slate-700 dark:text-slate-200">
               Soil
@@ -388,25 +418,56 @@ function PlantingFields({
           <ChoiceCard
             checked={deviceChoice === "existing"}
             onSelect={() => setDeviceChoice("existing")}
-            disabled={devices.length === 0}
-            title="Use a device in this garden"
-            hint={devices.length ? `${devices.length} available` : "No devices in this garden yet"}
+            disabled={freeDevices.length === 0}
+            title="Use an available device"
+            hint={
+              !allDevices
+                ? "Looking for your devices…"
+                : freeDevices.length
+                  ? `${freeDevices.length} free ${freeDevices.length === 1 ? "device" : "devices"} — not connected to any pot`
+                  : busyCount
+                    ? "All your devices are on pots — disconnect one first"
+                    : "You haven't added a device yet"
+            }
           />
+          {deviceChoice === "existing" && freeDevices.length ? (
+            <div role="radiogroup" aria-label="Available devices" className="max-h-60 space-y-1.5 overflow-y-auto rounded-xl border border-slate-200 p-1.5 dark:border-slate-800">
+              {freeDevices.map((device) => {
+                const checked = device.id === existingDeviceId;
+                const where =
+                  device.gardenId === gardenId
+                    ? "In this garden"
+                    : device.garden
+                      ? `In ${device.garden.name} · will move to this garden`
+                      : "Not in a garden yet · will be added here";
+                return (
+                  <button
+                    key={device.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={checked}
+                    onClick={() => setPickedDeviceId(device.id)}
+                    className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition ${
+                      checked ? "bg-emerald-50 ring-1 ring-emerald-500/60 dark:bg-emerald-500/10" : "hover:bg-slate-50 dark:hover:bg-slate-800/60"
+                    }`}
+                  >
+                    <Cpu size={16} className={checked ? "shrink-0 text-emerald-600 dark:text-emerald-400" : "shrink-0 text-slate-400"} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-semibold">{device.name}</span>
+                      <span className="block truncate text-xs text-slate-500 dark:text-slate-400">{where}</span>
+                    </span>
+                    <span className="flex shrink-0 items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+                      <span className={`h-2 w-2 rounded-full ${STATUS_DOT[device.status] ?? STATUS_DOT.NEVER_SEEN}`} />
+                      {statusLabel(device.status)}
+                    </span>
+                    {checked ? <Check size={15} className="shrink-0 text-emerald-600 dark:text-emerald-400" /> : null}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
           <ChoiceCard checked={deviceChoice === "new"} onSelect={() => setDeviceChoice("new")} title="Register a new device" hint="You'll get its key after saving." />
         </div>
-
-        {deviceChoice === "existing" && devices.length ? (
-          <label className="block">
-            <span className="mb-1 block text-sm font-bold text-slate-700 dark:text-slate-200">Device</span>
-            <select value={existingDeviceId} onChange={(e) => setExistingDeviceId(e.target.value)} className={fieldClass} required>
-              {devices.map((device) => (
-                <option key={device.id} value={device.id}>
-                  {device.name} — {statusLabel(device.status)}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : null}
 
         {deviceChoice === "new" ? (
           <div className="space-y-3 rounded-xl border border-slate-200 p-3 dark:border-slate-800">
@@ -933,9 +994,9 @@ function EditPotFields({
             className={fieldClass}
           />
           <datalist id="plant-catalog-edit">
-            {PLANT_CATALOG.map((item) => (
+            {SORTED_CATALOG.map((item) => (
               <option key={item.name} value={item.name}>
-                {item.aliases?.join(", ")}
+                {catalogHint(item)}
               </option>
             ))}
           </datalist>

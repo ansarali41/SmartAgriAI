@@ -7,7 +7,8 @@ import { useState } from "react";
 const links = [
   { href: "#features", label: "Features" },
   { href: "#how-it-works", label: "How it works" },
-  { href: "#platform", label: "Platform" },
+  { href: "#hardware", label: "Hardware" },
+  { href: "#faq", label: "FAQ" },
 ];
 
 export function LandingNavigation({ signedIn }: { signedIn: boolean }) {

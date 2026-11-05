@@ -2,18 +2,12 @@
 
 // Searchable garden switcher: one button that opens a filterable, scrolling
 // list, so it stays usable whether the user has 3 gardens or 1,000.
-import { useCallback, useId, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, MapPin, Search, Trees } from "lucide-react";
+import { useCallback, useId, useRef, useState } from "react";
+import { ChevronDown, Trees } from "lucide-react";
 import { useDismiss } from "@/components/HeaderMenus";
+import { GardenSearchList, type PickerGarden } from "@/components/GardenSearchList";
 
-export interface PickerGarden {
-  id: string;
-  name: string;
-  location?: string | null;
-  type?: string;
-}
-
-const MAX_RESULTS = 100;
+export type { PickerGarden };
 
 export function GardenPicker({
   gardens,
@@ -32,50 +26,19 @@ export function GardenPicker({
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [highlight, setHighlight] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const listId = useId();
   const triggerId = useId();
-  const close = useCallback(() => {
-    setOpen(false);
-    setQuery("");
-    setHighlight(0);
-  }, []);
+  const close = useCallback(() => setOpen(false), []);
   useDismiss(open, close, rootRef, triggerRef);
 
   const selected = value === "all" && allLabel ? { id: "all", name: allLabel, location: `${gardens.length} gardens` } : gardens.find((garden) => garden.id === value);
-  const matches = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    const list = needle
-      ? gardens.filter((garden) =>
-          [garden.name, garden.location ?? "", garden.type ?? ""].some((field) => field.toLowerCase().includes(needle)),
-        )
-      : gardens;
-    return list;
-  }, [gardens, query]);
-  const ALL: PickerGarden = { id: "all", name: allLabel ?? "" };
-  const shown = [...(allLabel && !query.trim() ? [ALL] : []), ...matches.slice(0, MAX_RESULTS)];
 
   // Return focus to the trigger after picking, for keyboard users.
-  function choose(gardenId: string) {
-    onChange(gardenId);
+  function choose(garden: PickerGarden) {
+    onChange(garden.id);
     close();
     document.getElementById(triggerId)?.focus();
-  }
-
-  function onKeyDown(event: React.KeyboardEvent) {
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      setHighlight((index) => Math.min(index + 1, shown.length - 1));
-    } else if (event.key === "ArrowUp") {
-      event.preventDefault();
-      setHighlight((index) => Math.max(index - 1, 0));
-    } else if (event.key === "Enter") {
-      event.preventDefault();
-      if (shown[highlight]) choose(shown[highlight].id);
-    }
   }
 
   return (
@@ -85,7 +48,7 @@ export function GardenPicker({
         ref={triggerRef}
         id={triggerId}
         type="button"
-        onClick={() => (open ? close() : setOpen(true))}
+        onClick={() => setOpen((value) => !value)}
         aria-haspopup="listbox"
         aria-expanded={open}
         className="flex w-full items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-left shadow-sm transition hover:border-slate-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700"
@@ -104,68 +67,7 @@ export function GardenPicker({
 
       {open ? (
         <div className="animate-fade-in absolute left-0 right-0 top-full z-30 mt-1.5 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl shadow-slate-950/10 dark:border-slate-800 dark:bg-slate-900 dark:shadow-black/40">
-          <div className="border-b border-slate-100 p-2 dark:border-slate-800">
-            <label className="relative block">
-              <span className="sr-only">Search gardens</span>
-              <Search size={15} aria-hidden="true" className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                autoFocus
-                type="search"
-                value={query}
-                onChange={(e) => {
-                  setQuery(e.target.value);
-                  setHighlight(0);
-                }}
-                onKeyDown={onKeyDown}
-                placeholder={`Search ${gardens.length} gardens…`}
-                role="combobox"
-                aria-controls={listId}
-                aria-expanded="true"
-                aria-activedescendant={shown[highlight] ? `${listId}-${shown[highlight].id}` : undefined}
-                className="w-full rounded-lg border border-slate-200 bg-slate-50 py-2 pl-8 pr-3 text-sm placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 [&::-webkit-search-cancel-button]:hidden"
-              />
-            </label>
-          </div>
-          <ul id={listId} role="listbox" aria-label="Gardens" className="max-h-72 overflow-y-auto p-1">
-            {shown.length === 0 ? (
-              <li className="px-3 py-6 text-center text-sm text-slate-400">No gardens match “{query}”.</li>
-            ) : (
-              shown.map((garden, index) => {
-                const isSelected = garden.id === value;
-                return (
-                  <li
-                    key={garden.id}
-                    id={`${listId}-${garden.id}`}
-                    role="option"
-                    aria-selected={isSelected}
-                    onMouseEnter={() => setHighlight(index)}
-                    onClick={() => choose(garden.id)}
-                    className={`flex cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 ${
-                      index === highlight ? "bg-slate-100 dark:bg-slate-800" : ""
-                    }`}
-                  >
-                    <span className="min-w-0 flex-1">
-                      <span className={`block truncate text-sm ${isSelected ? "font-bold text-emerald-700 dark:text-emerald-300" : "font-medium"}`}>
-                        {garden.name}
-                      </span>
-                      {garden.location ? (
-                        <span className="flex items-center gap-1 truncate text-[11px] text-slate-500 dark:text-slate-400">
-                          <MapPin size={10} className="shrink-0" />
-                          {garden.location}
-                        </span>
-                      ) : null}
-                    </span>
-                    {isSelected ? <Check size={15} className="shrink-0 text-emerald-600 dark:text-emerald-400" /> : null}
-                  </li>
-                );
-              })
-            )}
-          </ul>
-          {matches.length > MAX_RESULTS ? (
-            <p className="border-t border-slate-100 px-3 py-2 text-[11px] text-slate-400 dark:border-slate-800">
-              Showing {MAX_RESULTS} of {matches.length} — type to narrow down.
-            </p>
-          ) : null}
+          <GardenSearchList gardens={gardens} selectedId={value} allLabel={allLabel} onChoose={choose} />
         </div>
       ) : null}
     </div>

@@ -44,10 +44,20 @@ export interface GardenForm {
   lng: string;
 }
 
+export interface GardenCardAlert {
+  id: string;
+  severity: "critical" | "warning" | "info";
+  title: string;
+  message: string;
+  potId?: string;
+}
+
 export interface GardenOverview {
   id: string;
   deviceSummary: { online: number; stale?: number; offline: number };
   pumpsOn: number;
+  /** Open alerts, most serious first (same rules as the details page). */
+  alerts?: GardenCardAlert[];
 }
 
 export const emptyForm: GardenForm = {

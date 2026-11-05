@@ -3,8 +3,15 @@
 import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { Check, KeyRound, Mail, User, X } from "lucide-react";
 import { apiPost } from "@/lib/api-client";
-import { Field } from "../login/LoginForm";
+import { AuthError, AuthField, AuthSubmit } from "@/components/AuthFields";
+
+const RULES: { label: string; test: (password: string) => boolean }[] = [
+  { label: "At least 8 characters", test: (p) => p.length >= 8 },
+  { label: "A letter and a number", test: (p) => /[a-z]/i.test(p) && /\d/.test(p) },
+];
+
 
 export function RegisterForm() {
   const router = useRouter();
@@ -13,48 +20,53 @@ export function RegisterForm() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const rulesMet = RULES.every((rule) => rule.test(password));
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!rulesMet) return;
     setError("");
     setLoading(true);
     try {
-      await apiPost("/api/auth/register", { email, password, userName });
-      const res = await signIn("credentials", {
-        email,
-        password,
-        redirect: false,
-      });
-      if (res?.error) throw new Error("Could not sign in after registering");
+      await apiPost("/api/auth/register", { email: email.trim(), password, userName: userName.trim() });
+      const res = await signIn("credentials", { email: email.trim(), password, redirect: false });
+      if (res?.error) throw new Error("Your account was created, but signing in failed. Try signing in.");
       router.push("/dashboard");
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Registration failed");
-    } finally {
+      setError(err instanceof Error ? err.message : "Couldn't create the account.");
       setLoading(false);
     }
   }
 
   return (
-    <form
-      onSubmit={onSubmit}
-      className="space-y-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900"
-    >
-      {error ? (
-        <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm font-bold text-rose-600 dark:bg-rose-950/40">
-          {error}
-        </p>
-      ) : null}
-      <Field label="Name" type="text" value={userName} onChange={setUserName} placeholder="Your name" />
-      <Field label="Email" type="email" value={email} onChange={setEmail} placeholder="farmer@example.com" />
-      <Field label="Password" type="password" value={password} onChange={setPassword} placeholder="At least 6 characters" />
-      <button
-        type="submit"
-        disabled={loading}
-        className="w-full rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-emerald-700 disabled:opacity-60"
-      >
-        {loading ? "Creating account…" : "Create account"}
-      </button>
+    <form onSubmit={onSubmit} className="space-y-5">
+      <AuthError message={error} />
+      <AuthField label="Your name" icon={User} value={userName} onChange={setUserName} placeholder="e.g. Sanzida Zinia" autoComplete="name" autoFocus />
+      <AuthField label="Email" icon={Mail} type="email" value={email} onChange={setEmail} placeholder="you@example.com" autoComplete="email" />
+      <AuthField
+        label="Password"
+        icon={KeyRound}
+        type="password"
+        value={password}
+        onChange={setPassword}
+        placeholder="Create a password"
+        autoComplete="new-password"
+        hint={
+          <span className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+            {RULES.map((rule) => {
+              const ok = rule.test(password);
+              return (
+                <span key={rule.label} className={`inline-flex items-center gap-1 text-xs ${ok ? "text-emerald-600 dark:text-emerald-400" : "text-slate-400"}`}>
+                  {ok ? <Check size={12} /> : <X size={12} />}
+                  {rule.label}
+                </span>
+              );
+            })}
+          </span>
+        }
+      />
+      <AuthSubmit loading={loading} label="Create account" loadingLabel="Creating your account…" disabled={!rulesMet} />
     </form>
   );
 }

@@ -223,7 +223,6 @@ export function UserMenu({ email, userName = null }: { email: string; userName?:
       >
         <span className="hidden max-w-40 text-right leading-tight sm:block">
           <span className="block truncate text-sm font-bold">{name}</span>
-          <span className="block text-xs text-slate-500 dark:text-slate-400">Farm Operator</span>
         </span>
         <span className="grid h-9 w-9 place-items-center rounded-full bg-emerald-600 text-xs font-bold text-white ring-2 ring-emerald-600/20">
           {initials}

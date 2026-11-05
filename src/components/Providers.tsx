@@ -2,6 +2,7 @@
 
 import { SessionProvider } from "next-auth/react";
 import { SWRConfig } from "swr";
+import { FeedbackProvider } from "@/components/Feedback";
 
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
@@ -16,7 +17,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
           revalidateOnFocus: false,
         }}
       >
-        {children}
+        <FeedbackProvider>{children}</FeedbackProvider>
       </SWRConfig>
     </SessionProvider>
   );

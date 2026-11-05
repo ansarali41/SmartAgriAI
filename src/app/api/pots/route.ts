@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireUser } from "@/lib/api-auth";
 import { prisma } from "@/lib/db";
+import { nextPotNumber, potCode } from "@/lib/pot-number";
+import { getDeviceConnectionStatus } from "@/lib/device-status";
 
 export async function GET(req: Request) {
   const gate = await requireUser();
@@ -28,7 +30,9 @@ export async function GET(req: Request) {
     orderBy: { updatedAt: "desc" },
     include: {
       garden: { select: { name: true } },
-      plant: { select: { id: true, commonName: true } },
+      plant: { select: { id: true, commonName: true, healthStatus: true, growthStage: true } },
+      _count: { select: { deviceMappings: true } },
+      deviceMappings: { select: { device: { select: { id: true, name: true, lastSeenAt: true } } }, orderBy: { createdAt: "asc" } },
       readings: {
         where: { metric: "soil_moisture" },
         orderBy: { recordedAt: "desc" },
@@ -42,9 +46,15 @@ export async function GET(req: Request) {
       },
     },
   });
+  const now = new Date();
   return NextResponse.json(
-    pots.map(({ readings, deviceCommands, ...pot }) => ({
+    pots.map(({ readings, deviceCommands, deviceMappings, ...pot }) => ({
       ...pot,
+      sensors: deviceMappings.map(({ device }) => ({
+        id: device.id,
+        name: device.name,
+        status: getDeviceConnectionStatus(device.lastSeenAt, now),
+      })),
       currentMoisture: readings[0]?.value ?? null,
       moistureRecordedAt: readings[0]?.recordedAt ?? null,
       latestCommand: deviceCommands[0] ?? null,
@@ -54,7 +64,7 @@ export async function GET(req: Request) {
 
 const schema = z.object({
   gardenId: z.string().min(1),
-  label: z.string().min(1),
+  label: z.string().trim().max(60).optional(),
   sizeCm: z.number().optional(),
   soilType: z
     .enum(["loam", "clay", "sandy", "silt", "peat", "potting_mix"])
@@ -79,7 +89,10 @@ export async function POST(req: Request) {
     if (!garden) {
       return NextResponse.json({ error: "Garden not found" }, { status: 404 });
     }
-    const pot = await prisma.pot.create({ data: { ...parsed.data, userId } });
+    const pot = await prisma.$transaction(async (tx) => {
+      const number = await nextPotNumber(tx, userId);
+      return tx.pot.create({ data: { ...parsed.data, label: parsed.data.label || potCode(number), number, userId } });
+    });
     return NextResponse.json(pot, { status: 201 });
   } catch (error) {
     console.error("Pot create error:", error);

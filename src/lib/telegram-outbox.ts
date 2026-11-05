@@ -2,12 +2,20 @@ import "server-only";
 
 import type { TelegramDelivery } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { sendTelegramText, type TelegramSendResult } from "@/lib/telegram";
+import { type TelegramSendResult } from "@/lib/telegram";
+import { sendTelegramForUser } from "@/lib/telegram-settings";
 export { enqueueTelegramDelivery, type EnqueueTelegramDelivery } from "@/lib/telegram-delivery-enqueue";
 
 export const MAX_DELIVERY_ATTEMPTS = 6;
 export const DELIVERY_LEASE_MS = 60_000;
 export const DEFAULT_WORKER_BATCH_SIZE = 10;
+/**
+ * Alerts older than this are dropped instead of sent: an "irrigation started"
+ * message from yesterday is noise, and a long outage (or Telegram being set up
+ * for the first time) would otherwise flood the chat with a backlog.
+ */
+export const MAX_DELIVERY_AGE_MS = 6 * 60 * 60 * 1000;
+export const EXPIRED_ERROR_CODE = "EXPIRED";
 
 export function calculateRetryDelayMs(attemptCount: number, random = Math.random()) {
   const exponential = Math.min(60 * 60_000, 30_000 * 2 ** Math.max(0, attemptCount - 1));
@@ -29,13 +37,19 @@ type DeliveryStore = Pick<typeof prisma, "telegramDelivery">;
 
 export async function claimDueTelegramDeliveries(
   store: DeliveryStore = prisma,
-  options: { now?: Date; limit?: number; leaseMs?: number } = {},
+  options: { now?: Date; limit?: number; leaseMs?: number; userId?: string } = {},
 ) {
   const now = options.now ?? new Date();
   const limit = Math.max(1, Math.min(options.limit ?? DEFAULT_WORKER_BATCH_SIZE, 25));
   const leaseExpiresAt = new Date(now.getTime() + (options.leaseMs ?? DELIVERY_LEASE_MS));
+  // Expire stale backlog first so it is never claimed.
+  await store.telegramDelivery.updateMany({
+    where: { status: "PENDING", createdAt: { lt: new Date(now.getTime() - MAX_DELIVERY_AGE_MS) } },
+    data: { status: "FAILED", lastErrorCode: EXPIRED_ERROR_CODE, leaseExpiresAt: null },
+  });
   const candidates = await store.telegramDelivery.findMany({
     where: {
+      ...(options.userId ? { userId: options.userId } : {}),
       OR: [
         { status: "PENDING", nextAttemptAt: { lte: now } },
         { status: "PROCESSING", leaseExpiresAt: { lte: now } },
@@ -75,10 +89,11 @@ export async function claimDueTelegramDeliveries(
 export async function processTelegramDelivery(
   delivery: TelegramDelivery,
   store: DeliveryStore = prisma,
-  send: (text: string) => Promise<TelegramSendResult> = sendTelegramText,
+  /** Tests inject a sender; by default each delivery uses its owner's bot. */
+  send?: (text: string) => Promise<TelegramSendResult>,
   now = new Date(),
 ) {
-  const result = await send(delivery.messageText);
+  const result = await (send ? send(delivery.messageText) : sendTelegramForUser(delivery.userId, delivery.messageText));
   const activeClaim = { id: delivery.id, status: "PROCESSING" as const, leaseExpiresAt: { gt: now } };
 
   if (result.ok) {
@@ -113,11 +128,11 @@ export async function processTelegramDelivery(
 
 export async function runTelegramDeliveryWorker(
   store: DeliveryStore = prisma,
-  send: (text: string) => Promise<TelegramSendResult> = sendTelegramText,
-  options: { now?: Date; limit?: number } = {},
+  send?: (text: string) => Promise<TelegramSendResult>,
+  options: { now?: Date; limit?: number; userId?: string } = {},
 ) {
   const now = options.now ?? new Date();
-  const deliveries = await claimDueTelegramDeliveries(store, { now, limit: options.limit });
+  const deliveries = await claimDueTelegramDeliveries(store, { now, limit: options.limit, userId: options.userId });
   const outcomes = await Promise.all(deliveries.map((delivery) => processTelegramDelivery(delivery, store, send, now)));
   return {
     claimed: deliveries.length,
@@ -134,14 +149,14 @@ export async function runTelegramDeliveryWorker(
  */
 export async function runTelegramDeliveryWorkerUntilIdle(
   store: DeliveryStore = prisma,
-  send: (text: string) => Promise<TelegramSendResult> = sendTelegramText,
-  options: { now?: Date; limit?: number; maxBatches?: number } = {},
+  send?: (text: string) => Promise<TelegramSendResult>,
+  options: { now?: Date; limit?: number; maxBatches?: number; userId?: string } = {},
 ) {
   const maxBatches = Math.max(1, Math.min(options.maxBatches ?? 10, 50));
   const total = { claimed: 0, sent: 0, retried: 0, failed: 0 };
 
   for (let batch = 0; batch < maxBatches; batch += 1) {
-    const result = await runTelegramDeliveryWorker(store, send, { now: options.now, limit: options.limit });
+    const result = await runTelegramDeliveryWorker(store, send, { now: options.now, limit: options.limit, userId: options.userId });
     total.claimed += result.claimed;
     total.sent += result.sent;
     total.retried += result.retried;

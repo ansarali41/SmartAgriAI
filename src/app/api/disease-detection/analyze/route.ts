@@ -8,6 +8,7 @@ import { deleteDiseaseImage, saveDiseaseImage, validateDiseaseImage } from "@/li
 import { prisma } from "@/lib/db";
 import { formatDiseaseAnalysisNotification } from "@/lib/business-notifications";
 import { enqueueTelegramDelivery } from "@/lib/telegram-delivery-enqueue";
+import { createAppNotification } from "@/lib/notify";
 
 export const runtime = "nodejs";
 
@@ -119,6 +120,18 @@ export async function POST(req: Request) {
             confidence: history.confidence,
             occurredAt: history.createdAt,
           }),
+        });
+        const healthy = prediction.className.toLowerCase().includes("healthy");
+        await createAppNotification(tx, {
+          userId,
+          gardenId,
+          potId,
+          plantId: plant.id,
+          type: healthy ? "info" : "alert",
+          severity: healthy ? "low" : "high",
+          title: healthy ? `${pot.label} looks healthy` : `Possible disease on ${pot.label}: ${prediction.disease}`,
+          message: `${garden.name}: ${Math.round(prediction.confidence * 100)}% confidence.${healthy ? "" : " Open the result for treatment steps."}`,
+          actionUrl: "/disease-detection",
         });
         return { report, history };
       });

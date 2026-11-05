@@ -1,6 +1,7 @@
 // TASK: Add a pot together with its plant (both required) in one transaction,
 // seeding the plant's comfort thresholds from the plant catalog when known.
-// Optionally connect a sensor: an existing device in the garden, or a new one
+// Optionally connect a sensor: any of the user's free devices (moved into this
+// garden if needed), or a new one
 // registered here (its one-time key is returned, as in /api/devices).
 import { NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
@@ -9,6 +10,7 @@ import { requireUser } from "@/lib/api-auth";
 import { prisma } from "@/lib/db";
 import { generateDeviceKey } from "@/lib/device-key";
 import { findPlantProfile } from "@/lib/plant-catalog";
+import { nextPotNumber, potCode } from "@/lib/pot-number";
 
 const percent = z.number().min(0).max(100);
 
@@ -27,7 +29,8 @@ const deviceSchema = z.discriminatedUnion("mode", [
 const schema = z
   .object({
     pot: z.object({
-      label: z.string().trim().min(1).max(60),
+      // Empty = use the pot's serial, e.g. "POT-4".
+      label: z.string().trim().max(60).optional(),
       soilType: z.enum(["loam", "clay", "sandy", "silt", "peat", "potting_mix"]),
       sizeCm: z.number().positive().max(1000).optional(),
       position: z.string().trim().max(120).optional(),
@@ -68,17 +71,23 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   if (device?.mode === "existing") {
     const existing = await prisma.device.findFirst({
-      where: { id: device.deviceId, userId, gardenId },
-      select: { id: true },
+      where: { id: device.deviceId, userId },
+      select: { potMappings: { select: { pot: { select: { label: true } } }, take: 1 } },
     });
-    if (!existing) return NextResponse.json({ error: "That device isn't in this garden" }, { status: 400 });
+    if (!existing) return NextResponse.json({ error: "Device not found" }, { status: 404 });
+    // One board serves one pot: it must be disconnected from its current pot first.
+    const busyOn = existing.potMappings[0]?.pot.label;
+    if (busyOn) {
+      return NextResponse.json({ error: `That device is already connected to ${busyOn}. Disconnect it first.` }, { status: 409 });
+    }
   }
   const newKey = device?.mode === "new" ? generateDeviceKey() : null;
 
   try {
     const created = await prisma.$transaction(async (tx) => {
+      const number = await nextPotNumber(tx, userId);
       const newPot = await tx.pot.create({
-        data: { ...pot, userId, gardenId },
+        data: { ...pot, label: pot.label || potCode(number), number, userId, gardenId },
       });
       const newPlant = await tx.plant.create({
         data: {
@@ -111,8 +120,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       if (device) {
         connectedDevice =
           device.mode === "existing"
-            ? await tx.device.findUniqueOrThrow({
+            ? // A free board from another garden (or none) moves into this one.
+              await tx.device.update({
                 where: { id: device.deviceId },
+                data: { gardenId },
                 select: { id: true, name: true, hardwareId: true },
               })
             : await tx.device.create({
@@ -139,7 +150,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         return NextResponse.json({ error: "A device with this hardware ID already exists." }, { status: 409 });
       }
       return NextResponse.json(
-        { error: `A pot named "${pot.label}" already exists in this garden.` },
+        { error: `A pot named "${pot.label}" already exists in this garden — pick another name or leave it empty.` },
         { status: 409 },
       );
     }

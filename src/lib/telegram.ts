@@ -115,3 +115,45 @@ export async function sendTelegramText(
     clearTimeout(timeout);
   }
 }
+
+// ---------- Connecting a bot from the Settings page ----------
+
+export function looksLikeBotToken(value: string) {
+  return isValidBotToken(value.trim());
+}
+
+async function callTelegram<T>(token: string, method: string, fetchImpl: FetchLike = fetch): Promise<{ ok: true; result: T } | { ok: false; status: number; description?: string }> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  try {
+    const response = await fetchImpl(`${TELEGRAM_API_BASE_URL}/bot${token}/${method}`, { signal: controller.signal });
+    const payload = (await response.json().catch(() => null)) as { ok?: boolean; result?: T; description?: string } | null;
+    if (!response.ok || payload?.ok !== true) return { ok: false, status: response.status, description: payload?.description };
+    return { ok: true, result: payload.result as T };
+  } catch {
+    return { ok: false, status: 0 };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/** Checks a bot token with Telegram and returns the bot's @username. */
+export async function getTelegramBot(token: string, fetchImpl?: FetchLike) {
+  const response = await callTelegram<{ username?: string; first_name?: string }>(token, "getMe", fetchImpl);
+  if (!response.ok) return { ok: false as const, reason: response.status === 0 ? ("network" as const) : ("invalid-token" as const) };
+  return { ok: true as const, username: response.result.username ?? "", name: response.result.first_name ?? "" };
+}
+
+/**
+ * Finds the private chat of the latest person who messaged the bot (they
+ * pressed Start), so the user never has to look up a chat ID by hand.
+ */
+export async function findTelegramChat(token: string, fetchImpl?: FetchLike) {
+  type Update = { message?: { chat?: { id?: number; type?: string; first_name?: string; username?: string; title?: string } } };
+  const response = await callTelegram<Update[]>(token, "getUpdates", fetchImpl);
+  if (!response.ok) return { ok: false as const, reason: response.status === 409 ? ("webhook" as const) : ("error" as const) };
+  const chats = response.result.map((update) => update.message?.chat).filter((chat) => chat?.id != null);
+  const chat = chats[chats.length - 1];
+  if (!chat) return { ok: false as const, reason: "no-messages" as const };
+  return { ok: true as const, chatId: String(chat.id), chatName: chat.username ? `@${chat.username}` : (chat.first_name ?? chat.title ?? "Telegram chat") };
+}

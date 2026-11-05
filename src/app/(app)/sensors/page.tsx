@@ -14,11 +14,16 @@ import {
   Copy,
   Cpu,
   EllipsisVertical,
+  Loader2,
+  Moon,
   Package,
   Plus,
+  RotateCcw,
+  RotateCw,
   Search,
   Trash2,
   Wifi,
+  WifiOff,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -30,7 +35,9 @@ import { useDismiss } from "@/components/HeaderMenus";
 import { GardenPicker } from "@/components/GardenPicker";
 import { AddDeviceGuide } from "@/components/AddDeviceGuide";
 import { DEVICE_TYPE_LABELS, deviceStatus, timeAgo } from "@/components/device-ui";
+import { errorMessage, useFeedback } from "@/components/Feedback";
 import { apiDelete, apiPatch, apiPost } from "@/lib/api-client";
+import { useNow } from "@/components/ListPage";
 
 interface Garden {
   id: string;
@@ -47,7 +54,63 @@ interface Device {
   lastSeenAt: string | null;
   garden: { name: string } | null;
   pots: { id: string; label: string }[];
+  pendingAction: DeviceAction | null;
+  pendingActionAt: string | null;
 }
+
+type DeviceAction = "RESTART" | "RESET_WIFI" | "SLEEP" | "FACTORY_RESET";
+
+/** Same as the server: an action the board hasn't picked up in 2 min is dropped. */
+const ACTION_TTL_MS = 2 * 60 * 1000;
+
+const ACTIONS: Record<
+  DeviceAction,
+  { label: string; icon: LucideIcon; doing: string; confirm: { title: string; message: string; confirmLabel: string; danger?: boolean }; done: string }
+> = {
+  RESTART: {
+    label: "Restart",
+    icon: RotateCw,
+    doing: "Restarting",
+    confirm: { title: "Restart {name}?", message: "The pump switches off and the board reboots. It's back online in about 10 seconds.", confirmLabel: "Restart" },
+    done: "Restart sent — back online in about 10 seconds",
+  },
+  RESET_WIFI: {
+    label: "Reset Wi-Fi",
+    icon: WifiOff,
+    doing: "Resetting Wi-Fi",
+    confirm: {
+      title: "Reset Wi-Fi on {name}?",
+      message:
+        "It forgets the Wi-Fi network and opens the “SmartAgri-Setup” hotspot. Join it from your phone to choose a network again. It stays in your account.",
+      confirmLabel: "Reset Wi-Fi",
+    },
+    done: "Wi-Fi reset sent — join “SmartAgri-Setup” from your phone",
+  },
+  SLEEP: {
+    label: "Turn off (sleep)",
+    icon: Moon,
+    doing: "Turning off",
+    confirm: {
+      title: "Turn off {name}?",
+      message: "The pump switches off and the board goes to deep sleep (Wi-Fi off, almost no power). It can't be woken from the app — press BOOT or EN on the board to turn it back on.",
+      confirmLabel: "Turn off",
+    },
+    done: "Turning off — press BOOT on the board to wake it",
+  },
+  FACTORY_RESET: {
+    label: "Factory reset",
+    icon: RotateCcw,
+    doing: "Factory resetting",
+    confirm: {
+      title: "Factory reset {name}?",
+      message:
+        "The board erases its Wi-Fi, server address and key, and is removed from your account. Its past readings are deleted too. To use it again, set it up from Add device.",
+      confirmLabel: "Factory reset",
+      danger: true,
+    },
+    done: "Factory reset sent — the board will be removed",
+  },
+};
 
 type StatusFilter = "all" | "online" | "attention" | "waiting";
 
@@ -71,6 +134,7 @@ export default function SensorsPage() {
 }
 
 function SensorsContent() {
+  const { confirm, toast } = useFeedback();
   const searchParams = useSearchParams();
   const linkedBoard = searchParams.get("claim");
   const linkedCode = searchParams.get("code");
@@ -109,13 +173,48 @@ function SensorsContent() {
 
   const filtersActive = query.trim() !== "" || gardenFilter !== "all" || statusFilter !== "all";
 
+  async function sendAction(device: Device, action: DeviceAction) {
+    const spec = ACTIONS[action];
+    const ok = await confirm({
+      title: spec.confirm.title.replace("{name}", device.name),
+      message: spec.confirm.message,
+      confirmLabel: spec.confirm.confirmLabel,
+      tone: spec.confirm.danger ? "danger" : "default",
+    });
+    if (!ok) return;
+    try {
+      await apiPost(`/api/devices/${device.id}/action`, { action });
+      mutate();
+      toast.success(spec.done);
+    } catch (err) {
+      toast.error(errorMessage(err, "Couldn't send that to the board"));
+    }
+  }
+
+  async function cancelAction(device: Device) {
+    try {
+      await apiDelete(`/api/devices/${device.id}/action`);
+      mutate();
+      toast.info("Cancelled");
+    } catch (err) {
+      toast.error(errorMessage(err, "Couldn't cancel"));
+    }
+  }
+
   async function remove(device: Device) {
-    if (!window.confirm(`Delete "${device.name}"? It will stop sending readings until registered again.`)) return;
+    const ok = await confirm({
+      title: `Delete ${device.name}?`,
+      message: "It stops sending readings and controlling its pump. To use the board again, add it again from Add device.",
+      confirmLabel: "Delete device",
+      tone: "danger",
+    });
+    if (!ok) return;
     try {
       await apiDelete(`/api/devices/${device.id}`);
       mutate();
+      toast.success(`${device.name} deleted`);
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : "Failed to delete device");
+      toast.error(errorMessage(err, "Failed to delete device"));
     }
   }
 
@@ -230,7 +329,14 @@ function SensorsContent() {
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {visible.map((device) => (
-            <DeviceCard key={device.id} device={device} onDelete={() => remove(device)} onAssign={() => setAssigning(device)} />
+            <DeviceCard
+              key={device.id}
+              device={device}
+              onDelete={() => remove(device)}
+              onAssign={() => setAssigning(device)}
+              onAction={(action) => sendAction(device, action)}
+              onCancelAction={() => cancelAction(device)}
+            />
           ))}
         </div>
       )}
@@ -241,7 +347,10 @@ function SensorsContent() {
         gardens={gardens ?? []}
         initialHardwareId={guide?.hardwareId}
         initialCode={guide?.code}
-        onDone={() => mutate()}
+        onDone={() => {
+          mutate();
+          toast.success("Device connected");
+        }}
         onManual={() => {
           setGuide(null);
           setRegistering(true);
@@ -255,6 +364,7 @@ function SensorsContent() {
         onSaved={() => {
           setAssigning(null);
           mutate();
+          toast.success("Device updated");
         }}
       />
 
@@ -311,8 +421,27 @@ function Tile({
   );
 }
 
-function DeviceCard({ device, onDelete, onAssign }: { device: Device; onDelete: () => void; onAssign: () => void }) {
+function DeviceCard({
+  device,
+  onDelete,
+  onAssign,
+  onAction,
+  onCancelAction,
+}: {
+  device: Device;
+  onDelete: () => void;
+  onAssign: () => void;
+  onAction: (action: DeviceAction) => void;
+  onCancelAction: () => void;
+}) {
+  const now = useNow(5000);
+  const pending =
+    device.pendingAction && device.pendingActionAt && now - new Date(device.pendingActionAt).getTime() < ACTION_TTL_MS ? ACTIONS[device.pendingAction] : null;
+  // Two separate questions, shown separately: is the board reachable (badge +
+  // dot), and is it set up (a pot to measure)? Mixing them made an online,
+  // unassigned board look like it had a connection problem.
   const status = deviceStatus(device.status);
+  const needsPot = device.pots.length === 0;
   const [copied, setCopied] = useState(false);
 
   async function copyId() {
@@ -338,9 +467,34 @@ function DeviceCard({ device, onDelete, onAssign }: { device: Device; onDelete: 
             {DEVICE_TYPE_LABELS[device.type] ?? device.type}
           </p>
         </div>
-        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-bold ${status.pill}`}>{status.label}</span>
-        <DeviceMenu device={device} onDelete={onDelete} onAssign={onAssign} />
+        <span className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-bold ${status.pill}`}>
+          <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${status.dot}`} />
+          {status.label}
+        </span>
+        <DeviceMenu device={device} onDelete={onDelete} onAssign={onAssign} onAction={onAction} />
       </header>
+
+      {needsPot && !pending ? (
+        <div className="mx-4 mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
+          <p className="flex items-start gap-1.5">
+            <CircleAlert size={14} className="mt-px shrink-0" />
+            <span>{"Setup needed — not connected to a pot yet, so its readings aren't saved."}</span>
+          </p>
+          <button type="button" onClick={onAssign} className="ml-5 mt-1 font-bold hover:underline">
+            Connect to a pot →
+          </button>
+        </div>
+      ) : null}
+
+      {pending ? (
+        <div className="mx-4 mb-3 flex items-center gap-2 rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-800 dark:bg-sky-500/10 dark:text-sky-200">
+          <Loader2 size={13} className="shrink-0 animate-spin" />
+          <span className="min-w-0 flex-1">{pending.doing} — waiting for the board to pick it up…</span>
+          <button type="button" onClick={onCancelAction} className="shrink-0 font-semibold hover:underline">
+            Cancel
+          </button>
+        </div>
+      ) : null}
 
       <dl className="space-y-2 px-4 pb-4 text-xs">
         <Row label="Garden">
@@ -350,7 +504,7 @@ function DeviceCard({ device, onDelete, onAssign }: { device: Device; onDelete: 
             </Link>
           ) : (
             <button type="button" onClick={onAssign} className="inline-flex items-center gap-1 font-semibold text-amber-600 hover:underline dark:text-amber-400">
-              Not in a garden · Assign
+              Not in a garden
             </button>
           )}
         </Row>
@@ -392,7 +546,8 @@ function DeviceCard({ device, onDelete, onAssign }: { device: Device; onDelete: 
       </dl>
 
       <p className="mt-auto border-t border-slate-100 px-4 py-2.5 text-[11px] text-slate-500 dark:border-slate-800 dark:text-slate-400">
-        {status.hint}
+        <span className={`mr-1.5 inline-block h-1.5 w-1.5 rounded-full align-middle ${status.dot}`} aria-hidden="true" />
+        {device.status === "ONLINE" ? "Online — connected to Wi-Fi and reporting to the app." : status.hint}
       </p>
     </article>
   );
@@ -412,7 +567,19 @@ function potHref(gardenId: string, potId: string) {
   return `/gardens/${gardenId}?tab=pots&pot=${potId}`;
 }
 
-function DeviceMenu({ device, onDelete, onAssign }: { device: Device; onDelete: () => void; onAssign: () => void }) {
+function DeviceMenu({
+  device,
+  onDelete,
+  onAssign,
+  onAction,
+}: {
+  device: Device;
+  onDelete: () => void;
+  onAssign: () => void;
+  onAction: (action: DeviceAction) => void;
+}) {
+  // The board can only pick up an action while it's checking in.
+  const reachable = device.status === "ONLINE" || device.status === "STALE";
   const name = device.name;
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -476,6 +643,34 @@ function DeviceMenu({ device, onDelete, onAssign }: { device: Device; onDelete: 
             </Link>
           ) : null}
           <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
+          <p className="px-2.5 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+            Board{reachable ? "" : " · offline — can't reach it"}
+          </p>
+          {(["RESTART", "RESET_WIFI", "SLEEP", "FACTORY_RESET"] as const).map((action) => {
+            const spec = ACTIONS[action];
+            const danger = action === "FACTORY_RESET";
+            return (
+              <button
+                key={action}
+                role="menuitem"
+                type="button"
+                disabled={!reachable}
+                onClick={() => {
+                  setOpen(false);
+                  onAction(action);
+                }}
+                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40 ${
+                  danger
+                    ? "text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-500/10"
+                    : "text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
+                }`}
+              >
+                <spec.icon size={15} className={danger ? "" : "text-slate-400"} />
+                {spec.label}
+              </button>
+            );
+          })}
+          <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
           <button
             role="menuitem"
             type="button"
@@ -486,7 +681,7 @@ function DeviceMenu({ device, onDelete, onAssign }: { device: Device; onDelete: 
             className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm font-medium text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-500/10"
           >
             <Trash2 size={15} />
-            Delete
+            Delete from app
           </button>
         </div>
       ) : null}

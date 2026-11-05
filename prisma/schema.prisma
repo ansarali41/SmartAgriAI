@@ -112,6 +112,13 @@ enum PotIrrigationMode {
   MANUAL
 }
 
+enum DeviceAction {
+  RESTART
+  RESET_WIFI
+  SLEEP
+  FACTORY_RESET
+}
+
 enum DeviceCommandType {
   PUMP_ON
   PUMP_OFF
@@ -195,6 +202,7 @@ model User {
   deviceCommands   DeviceCommand[]
   pumpEvents       PumpEvent[]
   telegramDeliveries TelegramDelivery[]
+  telegramSettings TelegramSettings?
   alertResolutions AlertResolution[]
 }
 
@@ -278,6 +286,8 @@ model Pot {
   id        String         @id @default(cuid())
   userId    String
   gardenId  String
+  /// Serial number per user (POT-1, POT-2, …), assigned by the server on create.
+  number    Int
   label     String
   sizeCm    Float?
   soilType  SoilType       @default(loam)
@@ -303,6 +313,7 @@ model Pot {
   pumpEvents       PumpEvent[]
 
   @@unique([gardenId, label])
+  @@unique([userId, number])
   @@index([userId, gardenId, status])
 }
 
@@ -349,6 +360,10 @@ model Device {
   firmwareVersion String?
   status          DeviceStatus   @default(NEVER_SEEN)
   lastSeenAt      DateTime?
+  /// A remote action waiting for the board (restart, Wi-Fi reset, sleep,
+  /// factory reset). The board picks it up on its next poll and confirms.
+  pendingAction   DeviceAction?
+  pendingActionAt DateTime?
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 
@@ -665,4 +680,20 @@ model Task {
   plant Plant @relation(fields: [plantId], references: [id], onDelete: Cascade)
 
   @@index([plantId, status])
+}
+
+// Per-user Telegram connection, set up from Settings. The bot token is stored
+// encrypted (AES-256-GCM, key derived from AUTH_SECRET) and never sent to the
+// browser. Falls back to TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID in .env.
+model TelegramSettings {
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  botTokenCipher String
+  botUsername    String
+  chatId         String?
+  chatName       String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

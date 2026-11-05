@@ -6,6 +6,7 @@ import {
   Droplets,
   Flower2,
   LayoutDashboard,
+  LogOut,
   Microscope,
   Moon,
   Package,
@@ -17,6 +18,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
+import { signOut } from "next-auth/react";
 import { usePathname } from "next/navigation";
 import { useSyncExternalStore, type ReactNode } from "react";
 
@@ -47,7 +49,7 @@ export const navSections: { title: string; items: NavItem[] }[] = [
   },
 ];
 
-// Notifications and Log out live in the top bar (bell + account menu).
+// Notifications live in the top bar; Log out is in both the account menu and here.
 const accountItems: NavItem[] = [{ to: "/settings", label: "Settings", icon: Settings }];
 
 export const navItems = [...navSections.flatMap((section) => section.items), ...accountItems];
@@ -169,6 +171,20 @@ export function Sidebar({
               collapsed={collapsed}
             />
           ))}
+          <li>
+            <button
+              type="button"
+              onClick={() => signOut({ callbackUrl: "/login" })}
+              aria-label={collapsed ? "Log out" : undefined}
+              className="group relative flex w-full items-center rounded-lg px-[15px] py-2.5 text-sm font-medium text-rose-600 transition-colors hover:bg-rose-50 hover:text-rose-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-600 dark:text-rose-400 dark:hover:bg-rose-500/10 dark:hover:text-rose-300"
+            >
+              <LogOut size={18} className="shrink-0 text-rose-500 group-hover:text-rose-600 dark:text-rose-400 dark:group-hover:text-rose-300" />
+              <Reveal collapsed={collapsed} className="pl-3">
+                Log out
+              </Reveal>
+              {collapsed ? <Tooltip>Log out</Tooltip> : null}
+            </button>
+          </li>
         </Section>
 
         <div className="mt-4 flex items-center pl-0.5">

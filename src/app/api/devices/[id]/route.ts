@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireUser } from "@/lib/api-auth";
 import { prisma } from "@/lib/db";
+import { otherDeviceOnPot } from "@/lib/device-claim";
 
 const schema = z
   .object({
@@ -38,6 +39,10 @@ export async function PATCH(
     if (!gardenId) return NextResponse.json({ error: "Choose the pot's garden too" }, { status: 400 });
     const pot = await prisma.pot.findFirst({ where: { id: potId, userId: gate, gardenId }, select: { id: true } });
     if (!pot) return NextResponse.json({ error: "Pot not found in this garden" }, { status: 400 });
+    const occupant = await otherDeviceOnPot(potId, id);
+    if (occupant) {
+      return NextResponse.json({ error: `This pot already has a sensor (${occupant}). Disconnect it first.` }, { status: 409 });
+    }
   }
 
   const gardenChanged = gardenId !== device.gardenId;

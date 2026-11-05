@@ -48,7 +48,7 @@ npm run db:migrate            # apply schema
 npm run db:seed               # demo user + device + sample readings
 npm run dev                   # http://localhost:3000
 ```
-Demo login: **demo@smartagri.ai** / **password123**
+Demo login: **sanzida@smartagri.ai** / **password123**
 
 ### 3. AI microservice (separate terminal)
 ```bash

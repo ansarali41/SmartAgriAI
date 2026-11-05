@@ -8,9 +8,10 @@ import { hashPassword } from "@/lib/password";
 import { defaultIrrigation } from "@/lib/defaults";
 
 const schema = z.object({
-  email: z.string().email(),
-  password: z.string().min(6, "Password must be at least 6 characters"),
-  userName: z.string().optional(),
+  email: z.string().trim().email("Enter a valid email address"),
+  // Same rule as changing the password in Settings.
+  password: z.string().min(8, "Password must be at least 8 characters").max(128),
+  userName: z.string().trim().max(100).optional(),
 });
 
 export async function POST(req: Request) {
@@ -44,7 +45,7 @@ export async function POST(req: Request) {
         email: normalizedEmail,
         passwordHash,
         passwordSalt,
-        userName: userName ?? normalizedEmail.split("@")[0],
+        userName: userName || normalizedEmail.split("@")[0],
         irrigationConfig: {
           create: {
             thresholdPercent: defaultIrrigation.threshold,

@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { formatDeviceOfflineNotification, formatDeviceRecoveredNotification } from "@/lib/business-notifications";
 import { enqueueTelegramDelivery } from "@/lib/telegram-delivery-enqueue";
 import { getDeviceConnectionThresholds } from "@/lib/device-status";
+import { createAppNotification } from "@/lib/notify";
 
 // This is also the server-side observation of the relay fail-safe window.
 export { DEFAULT_DEVICE_OFFLINE_THRESHOLD_SECONDS } from "@/lib/device-status";
@@ -64,6 +65,14 @@ export async function runDeviceOfflineMonitor(options: {
           lastSeenAt,
           thresholdSeconds: thresholdMs / 1_000,
         }),
+      });
+      await createAppNotification(tx, {
+        userId: device.userId,
+        type: "warning",
+        severity: "medium",
+        title: `${device.name} went offline`,
+        message: `No data from ${device.name}${device.garden ? ` in ${device.garden.name}` : ""} since ${lastSeenAt.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}. Check its power and Wi-Fi. Automatic watering for its pot is paused.`,
+        actionUrl: "/sensors",
       });
       return true;
     });

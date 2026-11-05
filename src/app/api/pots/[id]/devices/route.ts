@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireUser } from "@/lib/api-auth";
 import { prisma } from "@/lib/db";
+import { otherDeviceOnPot } from "@/lib/device-claim";
 
 const schema = z.object({ deviceId: z.string().trim().min(1) });
 
@@ -33,6 +34,13 @@ async function resolve(req: Request, params: Promise<{ id: string }>) {
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const target = await resolve(req, params);
   if (target instanceof NextResponse) return target;
+  const occupant = await otherDeviceOnPot(target.potId, target.deviceId);
+  if (occupant) {
+    return NextResponse.json(
+      { error: `This pot already has a sensor (${occupant}). Disconnect it first.` },
+      { status: 409 },
+    );
+  }
   const link = { deviceId: target.deviceId, potId: target.potId };
   await prisma.$transaction(async (tx) => {
     // A device without a garden joins the pot's garden.

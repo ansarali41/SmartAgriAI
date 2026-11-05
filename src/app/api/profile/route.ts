@@ -11,7 +11,12 @@ export async function GET() {
 
   const user = await prisma.user.findUnique({
     where: { id: gate },
-    select: { email: true, userName: true },
+    select: {
+      email: true,
+      userName: true,
+      createdAt: true,
+      _count: { select: { gardens: true, pots: true, devices: true } },
+    },
   });
   return NextResponse.json(user);
 }
@@ -21,7 +26,7 @@ const schema = z
     userName: z.string().trim().min(1).max(100).optional(),
     email: z.string().trim().email().optional(),
     currentPassword: z.string().min(1).optional(),
-    newPassword: z.string().min(6, "New password must be at least 6 characters").optional(),
+    newPassword: z.string().min(8, "New password must be at least 8 characters").max(128).optional(),
   })
   .strict()
   .refine(
@@ -63,6 +68,9 @@ export async function PATCH(req: Request) {
     !verifyPassword(parsed.data.currentPassword, user.passwordHash, user.passwordSalt)
   ) {
     return NextResponse.json({ error: "Current password is incorrect" }, { status: 400 });
+  }
+  if (parsed.data.newPassword && parsed.data.newPassword === parsed.data.currentPassword) {
+    return NextResponse.json({ error: "Choose a new password that's different from the current one." }, { status: 400 });
   }
 
   const passwordUpdate = parsed.data.newPassword

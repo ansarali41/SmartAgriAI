@@ -15,6 +15,7 @@ test("offline threshold is explicit and defaults to the connection-status fallba
 test("concurrent monitors create one offline transition and one durable event", async () => {
   let status = "ONLINE";
   const enqueued: any[] = [];
+  const inApp: any[] = [];
   const candidate = { id: "device-1", userId: "user-1", name: "ESP32", lastSeenAt, garden: { name: "Roof" } };
   const store = {
     device: { findMany: async () => status === "ONLINE" ? [candidate] : [] },
@@ -25,6 +26,7 @@ test("concurrent monitors create one offline transition and one durable event", 
         return { count: 1 };
       } },
       telegramDelivery: { createMany: async (value: any) => { enqueued.push(value); return { count: 1 }; } },
+      notification: { create: async (value: any) => { inApp.push(value); return value.data; } },
     }),
   };
   const [first, second] = await Promise.all([
@@ -35,6 +37,8 @@ test("concurrent monitors create one offline transition and one durable event", 
   assert.equal(status, "OFFLINE");
   assert.equal(enqueued.length, 1);
   assert.equal(enqueued[0].data.eventKey, deviceOfflineEventKey("device-1", lastSeenAt));
+  assert.equal(inApp.length, 1);
+  assert.equal(inApp[0].data.title, "ESP32 went offline");
 });
 
 test("valid ingestion atomically records a recovery only from the OFFLINE state", () => {

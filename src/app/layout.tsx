@@ -3,9 +3,9 @@ import "./globals.css";
 import { Providers } from "@/components/Providers";
 
 export const metadata: Metadata = {
-  title: "SmartAgri — Crop Health & Smart Irrigation",
+  title: "SmartAgri — Smart watering & plant care",
   description:
-    "AI-driven IoT framework for crop health prediction and smart irrigation management.",
+    "A soil sensor in each pot, automatic watering, phone alerts and a leaf doctor with home remedies — for any garden, greenhouse or farm plot.",
 };
 
 // Same rule the theme switch uses: saved choice first, else the OS setting.

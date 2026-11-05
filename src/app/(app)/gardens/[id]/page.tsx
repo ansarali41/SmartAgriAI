@@ -50,6 +50,7 @@ import {
   type Garden,
   type GardenForm,
 } from "@/components/GardenForm";
+import { errorMessage, useFeedback } from "@/components/Feedback";
 import { apiDelete, apiPatch, apiPost } from "@/lib/api-client";
 import {
   SELECTED_GARDEN_STORAGE_KEY,
@@ -126,6 +127,7 @@ export default function GardenDetailsPage() {
 }
 
 function GardenDetails() {
+  const { confirm, toast } = useFeedback();
   const { id } = useParams<{ id: string }>();
   // ?tab=pots&pot=<id> deep-links to a pot, e.g. from the Sensors page.
   const searchParams = useSearchParams();
@@ -193,6 +195,7 @@ function GardenDetails() {
     setSaving(true);
     try {
       await apiPatch(`/api/gardens/${garden!.id}`, parseGardenForm(form));
+      toast.success("Garden saved");
       setEditing(false);
       mutate();
       mutateActivity();
@@ -204,27 +207,37 @@ function GardenDetails() {
   }
 
   async function removePot(pot: GardenActivity["pots"][number]) {
-    const what = pot.plant ? `${pot.label} and its ${pot.plant.commonName}` : pot.label;
-    if (!window.confirm(`Delete ${what}? Its readings and watering history are removed too.`)) return;
+    const ok = await confirm({
+      title: `Delete ${pot.label}?`,
+      message: `${pot.plant ? `The ${pot.plant.commonName} plant, its` : "Its"} readings and watering history will be removed. This can't be undone.`,
+      confirmLabel: "Delete pot",
+      tone: "danger",
+    });
+    if (!ok) return;
     try {
       await apiDelete(`/api/pots/${pot.id}`);
       mutate();
       mutateActivity();
+      toast.success(`${pot.label} deleted`);
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : "Failed to delete pot");
+      toast.error(errorMessage(err, "Failed to delete pot"));
     }
   }
 
   async function remove() {
-    const confirmed = window.confirm(
-      `Delete "${garden!.name}"? Its ${garden!._count.pots} pots, ${garden!._count.plants} plants and sensor history will be removed.`,
-    );
-    if (!confirmed) return;
+    const ok = await confirm({
+      title: `Delete “${garden!.name}”?`,
+      message: `Its ${garden!._count.pots} pots, ${garden!._count.plants} plants, devices and all sensor history will be removed. This can't be undone.`,
+      confirmLabel: "Delete garden",
+      tone: "danger",
+    });
+    if (!ok) return;
     try {
       await apiDelete(`/api/gardens/${garden!.id}`);
+      toast.success(`${garden!.name} deleted`);
       router.push("/gardens");
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : "Failed to delete garden");
+      toast.error(errorMessage(err, "Failed to delete garden"));
     }
   }
 
@@ -474,6 +487,7 @@ function GardenDetails() {
                   key={device.id}
                   device={device}
                   pots={pots.filter((pot) => pot.sensors.some((sensor) => sensor.id === device.id))}
+                  onConnect={() => setTab("pots")}
                 />
               ))}
             </div>
@@ -501,11 +515,11 @@ function GardenDetails() {
         gardenId={garden.id}
         gardenName={garden.name}
         existingPotLabels={pots.map((pot) => pot.label)}
-        devices={devices}
         onCreated={() => {
           mutate();
           mutateActivity();
           setTab("pots");
+          toast.success("Pot and plant added");
         }}
       />
       <AddDeviceGuide
@@ -517,6 +531,7 @@ function GardenDetails() {
         onDone={() => {
           mutate();
           mutateActivity();
+          toast.success("Device connected");
         }}
         onManual={() => {
           setAddingDeviceFor(guideForPot);
@@ -531,6 +546,7 @@ function GardenDetails() {
         onSaved={() => {
           mutate();
           mutateActivity();
+          toast.success("Changes saved");
         }}
       />
       <AddDevicePanel
@@ -541,6 +557,7 @@ function GardenDetails() {
         onCreated={() => {
           mutate();
           mutateActivity();
+          toast.success("Device registered");
         }}
       />
 
@@ -1159,11 +1176,15 @@ function PotCard({
   const sensorOnline = pot.sensors.some((sensor) => sensor.status === "ONLINE");
   const readingAgeMs = pot.moistureRecordedAt ? now - new Date(pot.moistureRecordedAt).getTime() : Infinity;
   const probeFault = sensorOnline && readingAgeMs > 60_000;
-  const moisture = probeFault ? null : pot.currentMoisture;
+  // No sensor: nothing is measuring this pot, so don't present the old value as current.
+  const noSensor = pot.sensors.length === 0;
+  const moisture = probeFault || noSensor ? null : pot.currentMoisture;
   const low = pot.moistureOnThreshold;
   const high = Math.max(pot.moistureOffThreshold ?? low, low);
   const state =
-    probeFault
+    noSensor
+      ? { text: "No sensor", tone: "text-slate-400", bar: "bg-slate-300" }
+      : probeFault
       ? { text: "Probe not reading", tone: "text-rose-600 dark:text-rose-400", bar: "bg-slate-300" }
       : moisture == null
       ? { text: "No reading", tone: "text-slate-400", bar: "bg-slate-300" }
@@ -1206,7 +1227,13 @@ function PotCard({
             ) : null}
           </p>
         </div>
-        <PotMenu label={pot.label} onEdit={onEdit} onAddDevice={onAddDevice} onDelete={onDelete} wateringHref={wateringHref} />
+        <PotMenu
+          label={pot.label}
+          onEdit={onEdit}
+          onAddDevice={pot.sensors.length ? undefined : onAddDevice}
+          onDelete={onDelete}
+          wateringHref={wateringHref}
+        />
       </header>
 
       {/* Moisture */}
@@ -1236,7 +1263,13 @@ function PotCard({
             Target {low}–{high}%
           </span>
           <span title={pot.moistureRecordedAt ? formatDateTime(pot.moistureRecordedAt) : undefined}>
-            {pot.moistureRecordedAt ? timeAgo(pot.moistureRecordedAt) : "soil moisture"}
+            {noSensor
+              ? pot.currentMoisture != null && pot.moistureRecordedAt
+                ? `Last ${pot.currentMoisture}% · ${timeAgo(pot.moistureRecordedAt)}`
+                : "soil moisture"
+              : pot.moistureRecordedAt
+                ? timeAgo(pot.moistureRecordedAt)
+                : "soil moisture"}
           </span>
         </p>
       </div>
@@ -1282,7 +1315,8 @@ function PotMenu({
 }: {
   label: string;
   onEdit: () => void;
-  onAddDevice: () => void;
+  /** Omitted when the pot already has its sensor (one per pot). */
+  onAddDevice?: () => void;
   onDelete: () => void;
   wateringHref: string;
 }) {
@@ -1317,10 +1351,12 @@ function PotMenu({
             <Pencil size={15} className="text-slate-400" />
             Edit pot & plant
           </button>
-          <button role="menuitem" type="button" onClick={() => run(onAddDevice)} className={item}>
-            <Cpu size={15} className="text-slate-400" />
-            Add device
-          </button>
+          {onAddDevice ? (
+            <button role="menuitem" type="button" onClick={() => run(onAddDevice)} className={item}>
+              <Cpu size={15} className="text-slate-400" />
+              Add device
+            </button>
+          ) : null}
           <Link role="menuitem" href={wateringHref} onClick={() => setOpen(false)} className={item}>
             <Droplets size={15} className="text-slate-400" />
             Watering settings
@@ -1371,8 +1407,20 @@ function PotSensor({
   ];
   const primary = pot.sensors[0];
 
+  const { confirm, toast } = useFeedback();
+
   async function change(method: "POST" | "DELETE", deviceId: string) {
     setOpen(false);
+    const deviceName = [...pot.sensors, ...available].find((device) => device.id === deviceId)?.name ?? "the sensor";
+    if (method === "DELETE") {
+      const ok = await confirm({
+        title: `Disconnect ${deviceName}?`,
+        message: `${pot.label} stops getting soil readings and automatic watering until a sensor is connected again. The device stays online and can be connected to another pot.`,
+        confirmLabel: "Disconnect",
+        tone: "danger",
+      });
+      if (!ok) return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -1383,8 +1431,9 @@ function PotSensor({
       });
       if (!response.ok) throw new Error(((await response.json().catch(() => ({}))) as { error?: string }).error);
       onChange();
+      toast.success(method === "DELETE" ? `${deviceName} disconnected from ${pot.label}` : `${deviceName} connected to ${pot.label}`);
     } catch (err) {
-      setError(err instanceof Error && err.message ? err.message : "Couldn't update the sensor.");
+      toast.error(errorMessage(err, "Couldn't update the sensor."));
     } finally {
       setBusy(false);
     }
@@ -1447,11 +1496,13 @@ function PotSensor({
             role="menu"
             className="animate-fade-in absolute inset-x-0 top-full z-20 mt-1 rounded-xl border border-slate-200 bg-white p-1 shadow-xl shadow-slate-950/10 dark:border-slate-800 dark:bg-slate-900 dark:shadow-black/40"
           >
+            {pot.sensors.length === 0 ? (
             <button role="menuitem" type="button" onClick={() => { setOpen(false); onAddDevice(); }} className={itemClass}>
               <Plus size={14} className="text-emerald-600 dark:text-emerald-400" />
               Add new device
             </button>
-            {available.length ? (
+            ) : null}
+            {pot.sensors.length === 0 && available.length ? (
               <>
                 <p className="px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Use existing</p>
                 {available.map((device) => (
@@ -1465,7 +1516,10 @@ function PotSensor({
             ) : null}
             {pot.sensors.length ? (
               <>
-                <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
+                {/* One sensor per pot: disconnect it before connecting another. */}
+                <p className="px-2.5 pb-1.5 pt-1 text-[11px] leading-snug text-slate-500 dark:text-slate-400">
+                  A pot has one sensor. Disconnect this one to connect a different device.
+                </p>
                 {pot.sensors.map((sensor) => (
                   <button
                     key={sensor.id}
@@ -1491,12 +1545,24 @@ function PotSensor({
 function DeviceCard({
   device,
   pots,
+  onConnect,
 }: {
   device: GardenActivity["devices"][number];
   /** Pots this device is connected to. */
   pots: { id: string; label: string }[];
+  onConnect: () => void;
 }) {
-  const status = deviceStatus(device.status);
+  // Online but not connected to a pot: its soil readings aren't saved anywhere.
+  const unlinked = device.status === "ONLINE" && pots.length === 0;
+  const status = unlinked
+    ? {
+        ...deviceStatus(device.status),
+        dot: "bg-amber-500",
+        pill: "bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300",
+        label: "No pot",
+        hint: "Online, but its readings aren't saved until it's connected to a pot.",
+      }
+    : deviceStatus(device.status);
   return (
     <article className="flex flex-col rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
       <header className="flex items-start gap-3 p-4">
@@ -1540,9 +1606,14 @@ function DeviceCard({
         </div>
       </dl>
 
-      <p className="mt-auto border-t border-slate-100 px-4 py-2.5 text-[11px] text-slate-500 dark:border-slate-800 dark:text-slate-400">
-        {status.hint}
-      </p>
+      <div className="mt-auto flex items-center justify-between gap-2 border-t border-slate-100 px-4 py-2.5 text-[11px] text-slate-500 dark:border-slate-800 dark:text-slate-400">
+        <span>{status.hint}</span>
+        {pots.length === 0 ? (
+          <button type="button" onClick={onConnect} className="shrink-0 font-semibold text-emerald-600 hover:underline dark:text-emerald-400">
+            Connect to a pot →
+          </button>
+        ) : null}
+      </div>
     </article>
   );
 }

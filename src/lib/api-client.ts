@@ -18,3 +18,5 @@ export const apiPost = <T = unknown>(url: string, body?: unknown) =>
 export const apiPatch = <T = unknown>(url: string, body?: unknown) =>
   send<T>(url, "PATCH", body);
 export const apiDelete = <T = unknown>(url: string) => send<T>(url, "DELETE");
+export const apiPut = <T = unknown>(url: string, body?: unknown) =>
+  send<T>(url, "PUT", body);
