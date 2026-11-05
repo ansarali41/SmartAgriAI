@@ -28,15 +28,3 @@ export async function requireUser(): Promise<string | NextResponse> {
   }
   return session.user.id;
 }
-
-export function badRequest(message: string) {
-  return NextResponse.json({ error: message }, { status: 400 });
-}
-
-export function notFound(message = "Not found") {
-  return NextResponse.json({ error: message }, { status: 404 });
-}
-
-export function serverError(message = "Internal Server Error") {
-  return NextResponse.json({ error: message }, { status: 500 });
-}

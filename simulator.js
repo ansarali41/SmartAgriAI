@@ -19,9 +19,8 @@ const { loadEnvConfig } = require("@next/env");
 const path = require("node:path");
 
 // `node simulator.js` runs outside Next.js, so load .env using Next's own
-// environment loader. Resolve from this file, not process.cwd(), so the
-// scripts/simulate.ts wrapper works when launched from scripts/ too.
-// Explicit shell variables still take precedence.
+// environment loader. Resolve from this file, not process.cwd(), so it works
+// from any folder. Explicit shell variables still take precedence.
 loadEnvConfig(path.resolve(__dirname));
 
 const BACKEND_URL = process.env.API_URL || process.env.BASE_URL || "http://localhost:3000";

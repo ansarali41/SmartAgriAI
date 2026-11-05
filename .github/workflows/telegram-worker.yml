@@ -17,8 +17,8 @@ jobs:
 
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      # Same value as the web app: decrypts each user's saved Telegram bot token.
+      AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
 
     steps:
       - name: Checkout repository
@@ -39,8 +39,7 @@ jobs:
       - name: Validate required secrets
         run: |
           test -n "$DATABASE_URL"
-          test -n "$TELEGRAM_BOT_TOKEN"
-          test -n "$TELEGRAM_CHAT_ID"
+          test -n "$AUTH_SECRET"
 
       - name: Run Telegram Delivery Worker
         run: npm run telegram:worker

@@ -93,7 +93,7 @@ test("a stale PROCESSING lease is eligible for recovery", async () => {
 });
 
 test("bounded worker drain claims existing pending rows, increments attempts, and sends each once", async () => {
-  let rows = [
+  const rows = [
     delivery({ id: "delivery-1", status: "PENDING", attemptCount: 0, leaseExpiresAt: null }),
     delivery({ id: "delivery-2", eventKey: "disease:report-1", status: "PENDING", attemptCount: 0, leaseExpiresAt: null }),
   ];

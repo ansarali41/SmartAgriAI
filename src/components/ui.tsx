@@ -70,41 +70,6 @@ const TONES: Record<string, string> = {
   slate: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
 };
 
-export function StatTile({
-  label,
-  value,
-  unit,
-  icon,
-  tone = "emerald",
-}: {
-  label: string;
-  value: ReactNode;
-  unit?: string;
-  icon?: ReactNode;
-  tone?: keyof typeof TONES | string;
-}) {
-  return (
-    <Card>
-      <div className="flex items-center justify-between">
-        <p className="text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-          {label}
-        </p>
-        {icon ? (
-          <span className={`rounded-lg p-2 ${TONES[tone] ?? TONES.emerald}`}>
-            {icon}
-          </span>
-        ) : null}
-      </div>
-      <p className="mt-3 text-3xl font-black text-slate-950 dark:text-white">
-        {value}
-        {unit ? (
-          <span className="ml-1 text-base font-bold text-slate-400">{unit}</span>
-        ) : null}
-      </p>
-    </Card>
-  );
-}
-
 export function Badge({
   children,
   tone = "slate",

@@ -29,7 +29,8 @@ test("new telemetry restores ONLINE and missing or invalid timestamps are never 
 test("dashboard polling uses calculated status and command traffic cannot refresh telemetry", () => {
   const dashboard = readFileSync(resolve(process.cwd(), "src/app/(app)/gardens/[id]/page.tsx"), "utf8");
   const commands = readFileSync(resolve(process.cwd(), "src/app/api/iot/commands/route.ts"), "utf8");
-  assert.match(dashboard, /refreshInterval: 30000/);
+  // The garden page re-reads live status every 5 s.
+  assert.match(dashboard, /refreshInterval: 5000/);
   assert.match(commands, /claimDeviceCommands/);
   assert.doesNotMatch(commands, /lastSeenAt/);
   assert.doesNotMatch(commands, /status: "ONLINE"/);

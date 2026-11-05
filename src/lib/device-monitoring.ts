@@ -1,7 +1,7 @@
 import "server-only";
 
 import { prisma } from "@/lib/db";
-import { formatDeviceOfflineNotification, formatDeviceRecoveredNotification } from "@/lib/business-notifications";
+import { formatDeviceOfflineNotification } from "@/lib/business-notifications";
 import { enqueueTelegramDelivery } from "@/lib/telegram-delivery-enqueue";
 import { getDeviceConnectionThresholds } from "@/lib/device-status";
 import { createAppNotification } from "@/lib/notify";

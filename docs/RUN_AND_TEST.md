@@ -164,11 +164,6 @@ Then open **http://localhost:3000**, click **Sign in**, and use
 
 ### 5.1 Public endpoints (no auth)
 
-**Weather**
-```bash
-curl http://localhost:3000/api/weather
-```
-
 **IoT ingest + auto-irrigation** (uses the device key, not a login):
 ```bash
 # Low moisture -> pump decision returned in the response
@@ -204,35 +199,30 @@ curl -s -b $JAR http://localhost:3000/api/auth/session   # confirm logged in
 Now exercise the features:
 
 ```bash
-# Feature 1 — Disease detection (forwards to FastAPI, persists a report)
+# Gardens, pots and one garden's live view (moisture, weather, alerts)
+curl -s -b $JAR http://localhost:3000/api/gardens
+curl -s -b $JAR http://localhost:3000/api/pots
+curl -s -b $JAR http://localhost:3000/api/gardens/<GARDEN_ID>/dashboard
+
+# Disease detection (the pot must have a plant; the AI service must be running)
 curl -s -b $JAR -X POST http://localhost:3000/api/disease-detection/analyze \
-  -F "file=@../SmartGarden-main/DL_images_test/test6.JPG"
-curl -s -b $JAR http://localhost:3000/api/disease-detection/reports
+  -F "file=@leaf.jpg" -F "gardenId=<GARDEN_ID>" -F "potId=<POT_ID>"
+curl -s -b $JAR "http://localhost:3000/api/disease-detection/reports?limit=5"
 
-# Feature 2 — Latest readings + chart series
-curl -s -b $JAR http://localhost:3000/api/sensor-readings/latest
+# Irrigation for one pot: mode + watering levels, manual pump, history
+curl -s -b $JAR -X PATCH http://localhost:3000/api/pots/<POT_ID>/irrigation \
+  -H "Content-Type: application/json" \
+  -d '{"irrigationMode":"AUTO","moistureOnThreshold":40,"moistureOffThreshold":70}'
+curl -s -b $JAR -X POST http://localhost:3000/api/pots/<POT_ID>/pump \
+  -H "Content-Type: application/json" -d '{"pumpState":"on"}'   # manual mode only
+curl -s -b $JAR "http://localhost:3000/api/irrigation/logs?potId=<POT_ID>&limit=10"
 
-# Feature 3 — Irrigation control / threshold / logs
-curl -s -b $JAR http://localhost:3000/api/irrigation/control            # current state
-curl -s -b $JAR -X POST http://localhost:3000/api/irrigation/threshold \
-  -H "Content-Type: application/json" -d '{"threshold":40}'
-curl -s -b $JAR -X POST http://localhost:3000/api/irrigation/control \
-  -H "Content-Type: application/json" -d '{"status":"on","manualOverride":true}'
-curl -s -b $JAR http://localhost:3000/api/irrigation/logs
+# Analytics + Excel export for one pot
+curl -s -b $JAR "http://localhost:3000/api/analytics/pot?gardenId=<GARDEN_ID>&potId=<POT_ID>&range=7d"
+curl -s -b $JAR "http://localhost:3000/api/export/pot-analytics?gardenId=<GARDEN_ID>&potId=<POT_ID>&range=7d" -o pot.xlsx
 
-# Feature 4 — Recommendations
-curl -s -b $JAR http://localhost:3000/api/recommendations
-
-# Feature 5 — Crop health score (0–100, with factor breakdown)
-curl -s -b $JAR http://localhost:3000/api/health-score
-
-# Feature 6 — Weather (per-user location once set)
-curl -s -b $JAR http://localhost:3000/api/weather
-
-# Dashboard stats + CSV exports
-curl -s -b $JAR http://localhost:3000/api/dashboard/stats
-curl -s -b $JAR http://localhost:3000/api/export/sensors -o sensors.csv
-curl -s -b $JAR http://localhost:3000/api/export/irrigation -o irrigation.csv
+# Notifications
+curl -s -b $JAR http://localhost:3000/api/notifications
 
 # CRUD example
 curl -s -b $JAR -X POST http://localhost:3000/api/gardens \

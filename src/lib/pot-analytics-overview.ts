@@ -188,5 +188,3 @@ function describeEvent(event: {
   }
   return { kind: "other", title: `Pump ${event.status}`, detail: event.reason ?? "" };
 }
-
-export type PotAnalyticsOverview = NonNullable<Awaited<ReturnType<typeof getPotAnalyticsOverview>>>;

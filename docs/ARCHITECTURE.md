@@ -26,14 +26,14 @@ smartagriai/
 │  │  │         irrigation,sensors,analytics,notifications,settings}
 │  │  └─ api/                              # backend route handlers (see below)
 │  ├─ auth.ts                             # NextAuth config (Credentials + JWT)
-│  ├─ components/                         # Sidebar, Topbar, ui, SeriesChart, Providers
-│  ├─ lib/                                # pure logic: weather, irrigation, health-score,
-│  │                                      #   recommendations, ai, device-key, password
-│  └─ server/readings.ts                  # latest-reading queries
+│  ├─ components/                         # Sidebar, Topbar, ui, pickers, panels, Providers
+│  └─ lib/                                # logic: irrigation, weather, ai, plant catalog,
+│                                         #   device pairing/commands, alerts, Telegram
 ├─ prisma/{schema.prisma, seed.ts}        # PostgreSQL schema + demo seed
 ├─ services/ai/                           # FastAPI + TensorFlow + trained model
 ├─ iot/esp32/src/main.ino                 # ESP32 firmware
-└─ scripts/simulate.ts                    # sensor simulator
+├─ simulator.js                          # software ESP32 (npm run simulate)
+└─ scripts/telegram-delivery-worker.ts    # sends queued Telegram alerts
 ```
 
 ## Data model (PostgreSQL via Prisma)
@@ -56,28 +56,28 @@ one normalized schema:
 | Feature | Route(s) | Logic | Source |
 |---|---|---|---|
 | Disease detection | `POST /api/disease-detection/analyze`, `GET …/reports` | `lib/ai.ts` → FastAPI `/predict` → `DiseaseReport` | smartagriai controller + SmartGarden `.h5` |
-| Soil monitoring | `POST /api/iot/ingest`, `GET /api/sensor-readings/latest` | normalize moisture → `Reading` | ESP32 firmware + smartagriai iotService |
-| Auto irrigation | inside `/api/iot/ingest`, `/api/irrigation/{control,threshold,logs}` | `lib/irrigation.ts` (threshold + schedule + manual override + rain-skip) | smartagriai farmController + IoT relay |
-| Recommendations | `GET /api/recommendations` | `lib/recommendations.ts` vs `PlantThreshold` | PlantThreshold concept |
-| Health score | `GET /api/health-score` | `lib/health-score.ts` (env + disease) | smartagriai `getHealthScore` |
-| Weather | `GET /api/weather` | `lib/weather.ts` (OWM → Open-Meteo) | smartagriai weatherController |
+| Soil monitoring | `POST /api/iot/ingest`, `GET /api/gardens/[id]/dashboard` | normalize moisture → `Reading` (per pot) | ESP32 firmware + smartagriai iotService |
+| Auto irrigation (per pot) | inside `/api/iot/ingest`, `/api/pots/[id]/{irrigation,pump}`, `/api/irrigation/logs` | `lib/irrigation.ts` (start/stop levels, manual mode) → command queue (`/api/iot/commands`) | smartagriai farmController + IoT relay |
+| Recommendations | `GET /api/recommendations` (not in the UI yet) | `lib/recommendations.ts` vs `PlantThreshold` | PlantThreshold concept |
+| Health score | `GET /api/health-score` (not in the UI yet) | `lib/health-score.ts` (env + disease) | smartagriai `getHealthScore` |
+| Weather | inside `/api/gardens/[id]/dashboard` | `lib/weather.ts` (OWM → Open-Meteo) | smartagriai weatherController |
 
 ## Request flows
 
 **Sensor ingest + auto-irrigation**
 ```
 ESP32 ──POST /api/iot/ingest (x-device-key)──▶ verify device → write Reading rows
-   └─ decideIrrigation(moisture, threshold, schedules, weather.rainProb)
-        └─ if changed: update IrrigationConfig + log IrrigationEvent
-   ◀── { pump: "on"|"off", reason } ── ESP32 actuates relay (watchdog max 4.5s)
+   └─ decidePotIrrigation(moisture, pot's start/stop levels, mode)
+        └─ if the pump should change: queue a PUMP_ON / PUMP_OFF command
+ESP32 ──GET /api/iot/commands (every ~2 s)──▶ runs the command, acknowledges it
+   └─ on acknowledgement: pot.pumpState updated + IrrigationEvent logged
 ```
 
 **Disease detection**
 ```
 Dashboard ──multipart──▶ /api/disease-detection/analyze
    └─ lib/ai.ts ──FormData──▶ FastAPI /predict (TensorFlow or mock)
-        └─ persist DiseaseReport (+ healthScoreContribution)
-            └─ next /api/health-score call folds the contribution into the score
+        └─ persist DiseasePrediction + DiseaseReport (reopenable from history)
 ```
 
 ## Key design decisions
