@@ -151,6 +151,8 @@ The **Disease AI** page also shows a status chip: **AI model ready**, **demo mod
 
 ### 6. Connect a device (optional)
 
+Full guide (install, add, update, repair, replace): [docs/DEVICE_GUIDE.md](docs/DEVICE_GUIDE.md).
+
 **Wiring (ESP32 dev board)**
 
 | Part | ESP32 pin |
@@ -176,13 +178,17 @@ to each (card **⋮ → Move or rename**).
 
 **Flash the firmware (once)**
 
+Easy way: plug the board in by USB and run `npm run flash` (new board or update).
+Broken board that won't boot or connect: `npm run flash:reset` (wipes the board, then installs fresh).
+Manual steps:
+
 ```bash
 arduino-cli core install esp32:esp32
 arduino-cli lib install "ArduinoJson@7.4.3" "WiFiManager@2.0.17"
 cp iot/esp32/src/config.example.h iot/esp32/src/config.h   # adjust relay polarity / probe calibration if needed
 mkdir -p /tmp/smartagri_node
 cp iot/esp32/src/main.ino /tmp/smartagri_node/smartagri_node.ino
-cp iot/esp32/src/config.h /tmp/smartagri_node/
+cp iot/esp32/src/config.h iot/esp32/src/root_ca.h /tmp/smartagri_node/
 arduino-cli compile --fqbn esp32:esp32:esp32 /tmp/smartagri_node
 arduino-cli upload  --fqbn esp32:esp32:esp32:UploadSpeed=115200 -p /dev/cu.usbserial-XXXX /tmp/smartagri_node
 ```

@@ -21,7 +21,9 @@
     "db:seed": "prisma db seed",
     "db:studio": "prisma studio",
     "telegram:worker": "tsx --conditions=react-server scripts/telegram-delivery-worker.ts",
-    "simulate": "node simulator.js"
+    "simulate": "node simulator.js",
+    "flash": "bash scripts/flash-esp32.sh",
+    "flash:reset": "bash scripts/flash-esp32.sh --erase"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
