@@ -6,7 +6,9 @@ import { openSecret } from "@/lib/secret-box";
 import { getTelegramConfig, sendTelegramText, type TelegramConfig } from "@/lib/telegram";
 
 export async function getUserTelegramConfig(userId: string): Promise<{ config: TelegramConfig; source: "app" | "env" } | null> {
-  const settings = await prisma.telegramSettings.findUnique({ where: { userId }, select: { botTokenCipher: true, chatId: true } });
+  const settings = await prisma.telegramSettings.findUnique({ where: { userId }, select: { botTokenCipher: true, chatId: true, paused: true } });
+  // Disconnected in Settings: no alerts at all (not even via the .env bot).
+  if (settings?.paused) return null;
   if (settings?.chatId) {
     const botToken = openSecret(settings.botTokenCipher);
     if (botToken) return { config: { botToken, chatId: settings.chatId }, source: "app" };

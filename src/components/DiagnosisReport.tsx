@@ -46,6 +46,12 @@ export interface Diagnosis {
     restrictedTo?: string | null;
     lookedLike?: string | null;
     cropMatch?: number | null;
+    /** Which AI diagnosed it: "local" model or e.g. "gemini:gemini-2.5-flash". */
+    engine?: string | null;
+    /** The online AI's own plain-language summary. */
+    summary?: string | null;
+    /** Set when the online AI failed and the local model answered instead. */
+    fallbackReason?: string | null;
   } | null;
 }
 
@@ -80,7 +86,22 @@ const KIND: Record<DiseaseKind, { label: string; icon: LucideIcon; tone: string;
     tone: "bg-violet-50 text-violet-700 dark:bg-violet-500/10 dark:text-violet-300",
     panel: "border-violet-200 bg-violet-50/70 text-violet-900 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-100",
   },
+  care: {
+    label: "Care problem",
+    icon: Sprout,
+    tone: "bg-sky-50 text-sky-700 dark:bg-sky-500/10 dark:text-sky-300",
+    panel: "border-sky-200 bg-sky-50/70 text-sky-900 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-100",
+  },
 };
+
+/** "gemini:gemini-2.5-flash" → "Google Gemini (gemini-2.5-flash)"; local model → null. */
+function engineLabel(engine: string | null | undefined) {
+  if (!engine) return null;
+  const [provider, ...rest] = engine.split(":");
+  const model = rest.join(":");
+  const name = provider === "gemini" ? "Google Gemini" : provider === "groq" ? "Groq" : null;
+  return name ? `${name}${model ? ` (${model.split("/").pop()})` : ""}` : null;
+}
 
 function confidenceLabel(confidence: number) {
   if (confidence >= 0.85) return { text: "Very sure", bar: "bg-emerald-500" };
@@ -93,6 +114,7 @@ export function DiagnosisReport({ report, demo = false, inPanel = false }: { rep
   const kind = KIND[plan.kind];
   const percent = Math.round(report.confidence * 100);
   const details = report.details ?? null;
+  const online = engineLabel(details?.engine);
   const unsure = details?.uncertain ?? report.confidence < 0.6;
   // The AI's own "unsure" (close runner-up, photo doesn't look like the crop) wins over the %.
   const sure = unsure ? { text: "Not sure", bar: "bg-rose-500" } : confidenceLabel(report.confidence);
@@ -131,6 +153,7 @@ export function DiagnosisReport({ report, demo = false, inPanel = false }: { rep
             Scanned {new Date(report.createdAt).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}
             {seenCrop ? ` · looks like ${seenCrop} leaf` : ""}
           </p>
+          {online ? <p className="text-xs text-slate-400">Diagnosed by {online}</p> : null}
           {details?.restrictedTo ? (
             <p className="text-xs text-slate-400">Checked against {details.restrictedTo} diseases only ({report.pot.label} grows {report.plant.commonName})</p>
           ) : null}
@@ -146,12 +169,24 @@ export function DiagnosisReport({ report, demo = false, inPanel = false }: { rep
         </div>
       </div>
 
+      {details?.fallbackReason ? (
+        <Note tone="amber" icon={Info}>
+          Your online AI couldn&apos;t answer ({details.fallbackReason}) — this result is from the local model instead.
+        </Note>
+      ) : null}
       {demo ? (
         <Note tone="amber" icon={Info}>
           Demo result — the AI model isn&apos;t loaded, so this is a sample diagnosis, not a real one.
         </Note>
       ) : null}
-      {!plantCrop ? (
+      {online ? (
+        details?.cropMatch === 0 && details.lookedLike ? (
+          <Note tone="amber" icon={Info}>
+            This photo looks like {details.lookedLike}, but {report.pot.label} grows {report.plant.commonName}. Make sure you
+            photographed the right plant.
+          </Note>
+        ) : null
+      ) : !plantCrop ? (
         <Note tone="amber" icon={Info}>
           {`The AI was trained on crop leaves (tomato, potato, pepper, corn, grape, citrus and a few more). ${report.plant.commonName} isn't one of them, so treat this result as a rough guide. The home remedies below are safe for most plants.`}
         </Note>
@@ -170,7 +205,7 @@ export function DiagnosisReport({ report, demo = false, inPanel = false }: { rep
       ) : null}
 
       <div className={`rounded-xl border p-4 text-sm ${kind.panel}`}>
-        <p className="font-semibold">{plan.summary}</p>
+        <p className="font-semibold">{details?.summary || plan.summary}</p>
         {report.symptoms.length > 0 ? (
           <div className="mt-2.5 flex flex-wrap gap-1.5">
             <span className="text-xs font-semibold opacity-80">Look for:</span>

@@ -20,7 +20,10 @@ Pick **Singapore** for Supabase — `vercel.json` already runs the app in Singap
    **service_role / secret** key (`SUPABASE_SERVICE_ROLE_KEY`). Keep that key server-only.
    The private `disease-images` storage bucket is created automatically on the first upload.
 
-## 2. AI service on Hugging Face
+## 2. AI service on Hugging Face (optional)
+
+Skip this if you'll use **Google Gemini** or **Groq** for Disease AI (Settings → Disease AI,
+free API key, nothing to host). Then leave `AI_SERVICE_URL` / `AI_SERVICE_TOKEN` unset.
 
 1. huggingface.co → **New Space** → SDK **Docker** → blank → public or private.
 2. Upload everything inside `services/ai/` (keep the folders: `app/`, `models/`,

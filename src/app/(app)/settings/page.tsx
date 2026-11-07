@@ -28,6 +28,7 @@ import { PageHeader } from "@/components/ui";
 import { errorMessage, useFeedback } from "@/components/Feedback";
 import { apiDelete, apiPatch, apiPost, apiPut } from "@/lib/api-client";
 import { timeAgo } from "@/components/device-ui";
+import { DiseaseAiCard } from "@/components/DiseaseAiSettings";
 
 interface Profile {
   email: string;
@@ -86,6 +87,9 @@ export default function SettingsPage() {
       </div>
       <div className="mt-5">
         <TelegramCard />
+      </div>
+      <div className="mt-5">
+        <DiseaseAiCard />
       </div>
     </div>
   );
@@ -395,7 +399,7 @@ function CardSkeleton() {
 interface TelegramStatus {
   configured: boolean;
   source: "app" | "env" | null;
-  bot: { username: string; chatName: string | null; chatConnected: boolean } | null;
+  bot: { username: string; chatName: string | null; chatConnected: boolean; paused?: boolean } | null;
   queue: { pending: number; sent: number; failed: number; expired: number };
   lastSentAt: string | null;
   lastError: { code: string; at: string } | null;
@@ -455,16 +459,35 @@ function TelegramCard() {
   const disconnect = async () => {
     const ok = await confirm({
       title: "Disconnect Telegram?",
-      message: "Alerts will stop going to Telegram. You can connect again any time.",
+      message: "Alerts stop going to Telegram. Your bot stays saved, so you can reconnect with one click — no need to paste the token again.",
       confirmLabel: "Disconnect",
       tone: "danger",
     });
     if (ok) run("disconnect", async () => {
       await apiDelete("/api/telegram/settings");
-      return "Telegram disconnected";
+      return "Telegram disconnected — your bot is saved";
+    });
+  };
+  const reconnect = () =>
+    run("reconnect", async () => {
+      const result = await apiPatch<{ botUsername: string; chatFound: boolean }>("/api/telegram/settings", {});
+      return result.chatFound ? `Reconnected to @${result.botUsername}` : `@${result.botUsername} is back — now press Start in Telegram`;
+    });
+  const forget = async () => {
+    const ok = await confirm({
+      title: "Forget this bot?",
+      message: "The saved bot token is deleted. To use Telegram again you'll need to paste a token.",
+      confirmLabel: "Forget bot",
+      tone: "danger",
+    });
+    if (ok) run("forget", async () => {
+      await apiDelete("/api/telegram/settings?forget=1");
+      setReplacing(false);
+      return "Bot removed";
     });
   };
 
+  const paused = Boolean(data?.bot?.paused) && !replacing;
   const step = !data ? 0 : data.bot?.chatConnected && !replacing ? 3 : data.bot && !replacing ? 2 : 1;
   const usingEnv = data?.source === "env" && !data.bot;
 
@@ -483,7 +506,7 @@ function TelegramCard() {
             }`}
           >
             <span className={`h-1.5 w-1.5 rounded-full ${data.configured ? "bg-emerald-500" : "bg-amber-500"}`} />
-            {data.configured ? "Connected" : "Not connected"}
+            {data.configured ? "Connected" : data.bot?.paused ? "Paused" : "Not connected"}
           </span>
         ) : null
       }
@@ -494,7 +517,7 @@ function TelegramCard() {
         <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_16rem]">
           <div className="min-w-0 space-y-4">
             {/* Progress */}
-            {!usingEnv ? (
+            {!usingEnv && !paused ? (
               <ol className="flex flex-wrap items-center gap-2 text-xs font-semibold">
                 {["Add your bot", "Press Start", "Done"].map((label, i) => {
                   const n = i + 1;
@@ -517,7 +540,49 @@ function TelegramCard() {
               </ol>
             ) : null}
 
-            {usingEnv && !replacing ? (
+            {paused && data.bot ? (
+              <div className="space-y-3">
+                <div className="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50/70 p-3.5 dark:border-amber-500/30 dark:bg-amber-500/10">
+                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-slate-400 text-white dark:bg-slate-600">
+                    <Send size={16} />
+                  </span>
+                  <div className="min-w-0 text-sm">
+                    <p className="font-bold">@{data.bot.username} · paused</p>
+                    <p className="truncate text-xs text-slate-500 dark:text-slate-400">
+                      Saved{data.bot.chatName ? ` for ${data.bot.chatName}` : ""}. No alerts are sent until you reconnect.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={reconnect}
+                    disabled={busy !== null}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
+                  >
+                    {busy === "reconnect" ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />}
+                    Reconnect @{data.bot.username}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setReplacing(true)}
+                    disabled={busy !== null}
+                    className="rounded-lg px-3 py-2 text-sm font-semibold text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+                  >
+                    Use a different bot
+                  </button>
+                  <button
+                    type="button"
+                    onClick={forget}
+                    disabled={busy !== null}
+                    className="ml-auto text-xs font-semibold text-rose-600 hover:underline disabled:opacity-50"
+                  >
+                    Forget bot
+                  </button>
+                </div>
+                {error ? <p className="text-sm font-semibold text-rose-600">{error}</p> : null}
+              </div>
+            ) : usingEnv && !replacing ? (
               <div className="rounded-xl bg-slate-50 p-3.5 text-sm dark:bg-slate-950/60">
                 Connected through the server&apos;s settings (<code className={code}>.env</code>).{" "}
                 <button type="button" onClick={() => setReplacing(true)} className="font-semibold text-emerald-600 hover:underline dark:text-emerald-400">
@@ -609,7 +674,7 @@ function TelegramCard() {
                     {busy === "detect" ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />}
                     I&apos;ve pressed Start
                   </button>
-                  <button type="button" onClick={disconnect} disabled={busy !== null} className="rounded-lg px-3 py-2 text-sm font-semibold text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">
+                  <button type="button" onClick={() => setReplacing(true)} disabled={busy !== null} className="rounded-lg px-3 py-2 text-sm font-semibold text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">
                     Use a different bot
                   </button>
                 </div>

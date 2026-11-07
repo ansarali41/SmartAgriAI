@@ -5,6 +5,8 @@ import type { Severity } from "@prisma/client";
 import { requireUser } from "@/lib/api-auth";
 import { analyzeLeafImage, healthContributionFromPrediction, type AiPrediction } from "@/lib/ai";
 import { modelCropFor } from "@/lib/model-crops";
+import { getDiseaseEngine } from "@/lib/ai-settings";
+import { diagnoseOnline } from "@/lib/ai-vision";
 import { deleteDiseaseImage, saveDiseaseImage, validateDiseaseImage } from "@/lib/disease-images";
 import { prisma } from "@/lib/db";
 import { formatDiseaseAnalysisNotification } from "@/lib/business-notifications";
@@ -59,10 +61,28 @@ export async function POST(req: Request) {
     }
 
     const filename = file instanceof File && file.name ? file.name : "leaf.jpg";
-    let prediction: AiPrediction;
+    // The engine chosen in Settings → Disease AI: the local model, Gemini or Groq.
+    const engine = await getDiseaseEngine(userId);
+    let prediction: AiPrediction & { summary?: string };
+    let engineUsed = "local";
+    let fallbackReason: string | null = null;
+    // Tell the local model the pot's crop (when it knows it) so it only weighs that crop's diseases.
+    const runLocal = () => analyzeLeafImage(file, filename, modelCropFor(plant.commonName));
     try {
-      // Tell the model the pot's crop (when it knows it) so it only weighs that crop's diseases.
-      prediction = await analyzeLeafImage(file, filename, modelCropFor(plant.commonName));
+      if (engine.provider === "LOCAL") {
+        prediction = await runLocal();
+      } else {
+        try {
+          prediction = await diagnoseOnline({ provider: engine.provider, apiKey: engine.apiKey, model: engine.model, image: file, plantName: plant.commonName });
+          engineUsed = prediction.modelVersion;
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : "The online AI failed.";
+          if (!engine.fallbackToLocal) return NextResponse.json({ error: reason }, { status: 502 });
+          console.warn("Online AI failed, using the local model:", reason);
+          fallbackReason = reason;
+          prediction = await runLocal();
+        }
+      }
     } catch (error) {
       console.error("AI service call failed:", error);
       return NextResponse.json({ error: "Disease detection service is unavailable" }, { status: 502 });
@@ -110,6 +130,9 @@ export async function POST(req: Request) {
               restrictedTo: prediction.restrictedTo ?? null,
               lookedLike: prediction.lookedLike ?? null,
               cropMatch: prediction.cropMatch ?? null,
+              engine: engineUsed,
+              summary: prediction.summary ?? null,
+              fallbackReason,
             },
           },
         });

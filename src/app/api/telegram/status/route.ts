@@ -11,7 +11,8 @@ export async function GET() {
   const gate = await requireUser();
   if (gate instanceof NextResponse) return gate;
   const { getTelegramConfig } = await import("@/lib/telegram");
-  const settings = await prisma.telegramSettings.findUnique({ where: { userId: gate }, select: { botUsername: true, chatName: true, chatId: true } });
+  const settings = await prisma.telegramSettings.findUnique({ where: { userId: gate }, select: { botUsername: true, chatName: true, chatId: true, paused: true } });
+  const paused = Boolean(settings?.paused);
 
   const [groups, expired, lastSent, lastFailure] = await Promise.all([
     prisma.telegramDelivery.groupBy({ by: ["status"], where: { userId: gate }, _count: true }),
@@ -27,9 +28,10 @@ export async function GET() {
 
   return NextResponse.json({
     // Connected = this user's own bot with a chat, or the global .env bot.
-    configured: Boolean(settings?.chatId) || getTelegramConfig() !== null,
-    source: settings?.chatId ? "app" : getTelegramConfig() ? "env" : null,
-    bot: settings ? { username: settings.botUsername, chatName: settings.chatName, chatConnected: Boolean(settings.chatId) } : null,
+    // Disconnected (paused) = nothing is sent, even if a .env bot exists.
+    configured: !paused && (Boolean(settings?.chatId) || getTelegramConfig() !== null),
+    source: paused ? null : settings?.chatId ? "app" : getTelegramConfig() ? "env" : null,
+    bot: settings ? { username: settings.botUsername, chatName: settings.chatName, chatConnected: Boolean(settings.chatId), paused } : null,
     queue: {
       pending: count("PENDING") + count("PROCESSING"),
       sent: count("SENT"),

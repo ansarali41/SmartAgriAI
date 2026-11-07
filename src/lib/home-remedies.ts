@@ -17,7 +17,7 @@ export interface HomeRemedy {
   caution?: string;
 }
 
-export type DiseaseKind = "healthy" | "fungal" | "bacterial" | "viral" | "pest";
+export type DiseaseKind = "healthy" | "fungal" | "bacterial" | "viral" | "pest" | "care";
 
 export interface RemedyPlan {
   kind: DiseaseKind;
@@ -259,6 +259,32 @@ const PLANS: Record<string, RemedyPlan> = {
   },
 };
 
+// Broader groups an online AI (Gemini / Groq) can answer with, for plants and
+// problems the plans above don't name.
+PLANS.other_viral = {
+  kind: "viral",
+  summary: "Looks like a plant virus. There's no cure — keep it away from your other plants.",
+  firstSteps: ["Move the pot away from other plants.", "Remove the worst leaves, or the whole plant if most of it is affected.", "Wash hands and tools after touching it."],
+  remedies: r("handHygiene", "stickyTrap", "removeLeaves"),
+  escalate: "If it keeps spreading, remove the plant so it doesn't infect others.",
+};
+PLANS.other_pest = {
+  kind: "pest",
+  summary: "Insects or mites are feeding on the plant. Wash them off and treat weekly.",
+  firstSteps: ["Check the undersides of leaves and new shoots.", "Wash the pests off with a strong spray of water.", "Move the pot away from other plants."],
+  remedies: r("soapWater", "neemSpray", "garlicChili", "stickyTrap"),
+};
+PLANS.care_problem = {
+  kind: "care",
+  summary: "Not a disease — the plant is reacting to its care: water, light, food or temperature.",
+  firstSteps: [
+    "Feel the soil 2 cm down: water only when it's dry there, and make sure the pot drains.",
+    "Check the light: move it out of harsh afternoon sun, or closer to a window if it's stretching.",
+    "Trim the worst leaves — they won't turn green again.",
+  ],
+  remedies: r("compostTea", "airflow"),
+};
+
 // Diseases that behave like one of the plans above.
 const ALIASES: Record<string, string> = {
   apple_scab: "early_blight",
@@ -270,6 +296,7 @@ const ALIASES: Record<string, string> = {
   esca_black_measles: "early_blight",
   leaf_blight_isariopsis_leaf_spot: "septoria_leaf_spot",
   leaf_scorch: "septoria_leaf_spot",
+  other_bacterial: "bacterial_spot",
 };
 
 const GENERIC: RemedyPlan = {

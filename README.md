@@ -107,7 +107,21 @@ npm run dev
 
 Open **http://localhost:3000**.
 
-### 5. Start the AI service (for Disease AI) — second terminal
+### 5. Disease AI — choose an engine
+
+**Settings → Disease AI** picks what diagnoses leaf photos:
+
+| Engine | Setup | Good for |
+|---|---|---|
+| **Local model** (default) | the Python AI service below | 14 farm crops, offline, no account |
+| **Google Gemini** | free key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | any plant incl. houseplants, real photos |
+| **Groq** (Llama 4 vision) | free key from [console.groq.com/keys](https://console.groq.com/keys) | any plant, very fast |
+
+Paste the key, press **Test**, then **Save** — keys are stored encrypted (sealed with
+`AUTH_SECRET`). With an online engine the local service is optional: tick *"use the local
+model if the online AI fails"* only if it's running.
+
+#### Start the local AI service — second terminal
 
 First time only:
 

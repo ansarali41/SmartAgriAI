@@ -26,6 +26,7 @@ import { PotPicker, type PickerPot } from "@/components/PotPicker";
 import { SlideOver } from "@/components/SlideOver";
 import { DiagnosisReport, type Diagnosis } from "@/components/DiagnosisReport";
 import { useFeedback } from "@/components/Feedback";
+import Link from "next/link";
 
 interface HistoryItem {
   id: string;
@@ -44,7 +45,7 @@ interface HistoryPage {
   nextCursor: string | null;
   total?: number;
 }
-type AiStatus = { status: "ready" | "mock" | "offline"; labels?: number };
+type AiStatus = { status: "ready" | "mock" | "offline"; labels?: number; engine?: string; engineName?: string; model?: string };
 
 // Phone photos can be large; they're shrunk in the browser before upload
 // (the model only looks at 224×224, and Vercel caps request bodies at 4.5 MB).
@@ -437,14 +438,26 @@ function AiStatusChip({ ai }: { ai: AiStatus | undefined }) {
   if (!ai) return null;
   const [label, tone, dot] =
     ai.status === "ready"
-      ? ["AI model ready", "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300", "bg-emerald-500"]
+      ? [
+          ai.engineName ? `${ai.engineName} ready` : "Local AI model ready",
+          "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300",
+          "bg-emerald-500",
+        ]
       : ai.status === "mock"
         ? ["AI in demo mode", "bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300", "bg-amber-500"]
         : ["AI service offline", "bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300", "bg-rose-500"];
   return (
-    <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-bold ${tone}`}>
-      <span className={`h-2 w-2 rounded-full ${dot}`} />
-      {label}
+    <span className="inline-flex items-center gap-2">
+      <span
+        title={ai.model ? `Model: ${ai.model}` : undefined}
+        className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-bold ${tone}`}
+      >
+        <span className={`h-2 w-2 rounded-full ${dot}`} />
+        {label}
+      </span>
+      <Link href="/settings#disease-ai" className="text-xs font-semibold text-emerald-600 hover:underline dark:text-emerald-400">
+        Change
+      </Link>
     </span>
   );
 }
