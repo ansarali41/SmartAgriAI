@@ -329,7 +329,7 @@ function Dashboard({ data }: { data: Overview }) {
             </ComposedChart>
           </ChartFrame>
         ) : (
-          <NoData text="No soil readings in this period. Connect a sensor to this pot, or pick a longer period." />
+          <NoData text="No soil readings in this period. Connect a device to this pot, or pick a longer period." />
         )}
       </ChartCard>
 

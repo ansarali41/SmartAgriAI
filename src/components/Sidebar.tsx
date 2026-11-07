@@ -41,7 +41,7 @@ export const navSections: { title: string; items: NavItem[] }[] = [
     items: [
       { to: "/irrigation", label: "Irrigation", icon: Droplets },
       { to: "/disease-detection", label: "Disease AI", icon: Microscope },
-      { to: "/sensors", label: "Sensors", icon: Satellite },
+      { to: "/sensors", label: "Devices", icon: Satellite },
       { to: "/analytics", label: "Analytics", icon: BarChart3 },
     ],
   },

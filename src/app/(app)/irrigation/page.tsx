@@ -57,6 +57,8 @@ interface Pot {
   moistureRecordedAt: string | null;
   plant: { id: string; commonName: string } | null;
   _count?: { deviceMappings: number };
+  /** The device connected to this pot and the port of it the pot uses. */
+  sensors?: { id: string; name: string; port: number; status: string }[];
   latestCommand: {
     command: "PUMP_ON" | "PUMP_OFF";
     status:
@@ -108,6 +110,19 @@ function hasNoSensor(pot: Pot) {
   return pot._count?.deviceMappings === 0;
 }
 
+/** Default probe pin per port (firmware SOIL_PINS), for wiring hints. */
+const PROBE_PINS = [36, 39, 34, 35, 32, 33];
+
+/** The device + port this pot uses, if any. */
+function portLink(pot: Pot) {
+  return pot.sensors?.[0] ?? null;
+}
+
+function deviceDown(pot: Pot) {
+  const link = portLink(pot);
+  return Boolean(link && (link.status === "OFFLINE" || link.status === "NEVER_SEEN"));
+}
+
 /** The moisture to show: null when there's no sensor or the probe has gone quiet. */
 function liveMoisture(pot: Pot, now: number) {
   return hasNoSensor(pot) || probeSilent(pot, now) ? null : pot.currentMoisture;
@@ -120,7 +135,9 @@ const GREY = {
 };
 
 function moistureState(pot: Pot, now: number) {
-  if (hasNoSensor(pot)) return { text: "No sensor", ...GREY };
+  if (hasNoSensor(pot)) return { text: "No device", ...GREY };
+  const link = portLink(pot);
+  if (deviceDown(pot)) return { text: "Device offline", ...GREY };
   if (probeSilent(pot, now))
     return {
       ...GREY,
@@ -128,7 +145,12 @@ function moistureState(pot: Pot, now: number) {
       tone: "text-rose-600 dark:text-rose-400",
     };
   const m = pot.currentMoisture;
-  if (m == null) return { text: "No reading yet", ...GREY };
+  if (m == null)
+    return {
+      ...GREY,
+      text: link ? `No probe on port ${link.port}` : "No reading yet",
+      tone: "text-amber-600 dark:text-amber-400",
+    };
   if (m < pot.moistureOnThreshold)
     return {
       text: "Too dry",
@@ -186,7 +208,7 @@ function IrrigationContent() {
   const { data: pots, mutate: mutatePots } = useSWR<Pot[]>(
     gardenId ? `/api/pots?gardenId=${gardenId}` : null,
     {
-      refreshInterval: 5000,
+      refreshInterval: 3000,
     },
   );
   const [chosenPotId, setChosenPotId] = useState<string | null>(() =>
@@ -747,7 +769,7 @@ function PotControl({
               <span className="truncate">
                 {pot.plant?.commonName ?? "No plant"} · {gardenName}
               </span>
-              <SensorChip noSensor={noSensor} stale={stale} />
+              <SensorChip pot={pot} noSensor={noSensor} stale={stale} />
             </p>
           </div>
           <div className="flex w-full items-center gap-2 sm:w-auto">
@@ -841,16 +863,22 @@ function PotControl({
                     className="mt-1.5 inline-flex items-center gap-1 whitespace-nowrap rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-bold text-white hover:bg-emerald-700"
                   >
                     <Cpu size={12} />
-                    Connect a sensor
+                    Connect a device
                   </Link>
+                ) : deviceDown(pot) ? (
+                  <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                    {portLink(pot)!.name} isn&apos;t reporting — check its power and Wi-Fi.
+                  </p>
                 ) : stale ? (
                   <p className="mt-0.5 text-xs font-semibold text-amber-600 dark:text-amber-400">
-                    No reading since {timeAgo(pot.moistureRecordedAt!)} — check
-                    the probe.
+                    No reading on port {portLink(pot)?.port} since {timeAgo(pot.moistureRecordedAt!)} — check
+                    the probe{portLink(pot) ? ` (GPIO ${PROBE_PINS[portLink(pot)!.port - 1]})` : ""}.
                   </p>
                 ) : !pot.moistureRecordedAt ? (
-                  <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-                    Waiting for the first reading
+                  <p className="mt-0.5 text-xs text-amber-600 dark:text-amber-400">
+                    {portLink(pot)
+                      ? `No probe reading on port ${portLink(pot)!.port} yet — wire its probe to GPIO ${PROBE_PINS[portLink(pot)!.port - 1]}.`
+                      : "Waiting for the first reading"}
                   </p>
                 ) : null}
               </div>
@@ -909,7 +937,7 @@ function PotControl({
                 ) : null}
               </div>
 
-              {manual ? null : noSensor || stale ? (
+              {manual ? null : noSensor || stale || shown == null ? (
                 <p className="mt-2 flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-300">
                   <TriangleAlert size={13} className="shrink-0" />
                   <span>
@@ -1042,33 +1070,36 @@ function PotControl({
   );
 }
 
+/** Which device and port water this pot, and whether its probe is live. */
 function SensorChip({
+  pot,
   noSensor,
   stale,
 }: {
+  pot: Pot;
   noSensor: boolean;
   stale: boolean;
 }) {
-  const [label, tone] = noSensor
-    ? [
-        "No sensor",
-        "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400",
-      ]
-    : stale
-      ? [
-          "Probe not reading",
-          "bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300",
-        ]
-      : [
-          "Sensor live",
-          "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300",
-        ];
+  const link = portLink(pot);
+  const where = link ? `${link.name} · Port ${link.port}` : "";
+  const [label, tone, title] = noSensor
+    ? ["No device", "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400", "No device connected to this pot"]
+    : deviceDown(pot)
+      ? [`${where} · offline`, "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400", "The device isn't reporting"]
+      : stale || pot.currentMoisture == null
+        ? [
+            `${where} · no probe reading`,
+            "bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300",
+            link ? `Wire the probe for port ${link.port} to GPIO ${PROBE_PINS[link.port - 1]}` : "",
+          ]
+        : [where || "Device live", "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300", "Live readings from this port"];
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-bold ${tone}`}
+      title={title}
+      className={`inline-flex max-w-full items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-bold ${tone}`}
     >
-      <Cpu size={11} />
-      {label}
+      <Cpu size={11} className="shrink-0" />
+      <span className="truncate">{label}</span>
     </span>
   );
 }

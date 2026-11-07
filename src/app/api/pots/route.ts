@@ -32,7 +32,7 @@ export async function GET(req: Request) {
       garden: { select: { name: true } },
       plant: { select: { id: true, commonName: true, healthStatus: true, growthStage: true } },
       _count: { select: { deviceMappings: true } },
-      deviceMappings: { select: { device: { select: { id: true, name: true, lastSeenAt: true } } }, orderBy: { createdAt: "asc" } },
+      deviceMappings: { select: { port: true, device: { select: { id: true, name: true, lastSeenAt: true } } }, orderBy: { createdAt: "asc" } },
       readings: {
         where: { metric: "soil_moisture" },
         orderBy: { recordedAt: "desc" },
@@ -50,9 +50,11 @@ export async function GET(req: Request) {
   return NextResponse.json(
     pots.map(({ readings, deviceCommands, deviceMappings, ...pot }) => ({
       ...pot,
-      sensors: deviceMappings.map(({ device }) => ({
+      // The device connected to this pot and the port of it the pot uses.
+      sensors: deviceMappings.map(({ device, port }) => ({
         id: device.id,
         name: device.name,
+        port,
         status: getDeviceConnectionStatus(device.lastSeenAt, now),
       })),
       currentMoisture: readings[0]?.value ?? null,

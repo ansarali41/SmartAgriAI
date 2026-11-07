@@ -134,7 +134,7 @@ export default async function LandingPage() {
             <SectionIntro
               eyebrow="What it does"
               title="Everything a busy plant parent forgets — handled."
-              text="Each pot gets its own watering levels, its own sensor and its own history. You check in when you want to, not because you have to."
+              text="Each pot gets its own watering levels, its own soil probe and its own history. You check in when you want to, not because you have to."
             />
             <div className="mt-12 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
               <FeatureCard
@@ -150,7 +150,7 @@ export default async function LandingPage() {
                 icon={Cpu}
                 tone="emerald"
                 title="Live soil readings"
-                text="The sensor reports every few seconds. A dead probe or a loose wire shows up as a clear warning instead of a wrong number."
+                text="The device reports every few seconds. A dead probe or a loose wire shows up as a clear warning instead of a wrong number."
               />
               <FeatureCard
                 icon={ScanSearch}
@@ -162,7 +162,7 @@ export default async function LandingPage() {
                 icon={Bell}
                 tone="amber"
                 title="Alerts that matter"
-                text="Dry pot in manual mode, sensor offline, pump failed, disease found — in the app's bell and on your Telegram, at most once a day per problem."
+                text="Dry pot in manual mode, device offline, pump failed, disease found — in the app's bell and on your Telegram, at most once a day per problem."
               />
               <FeatureCard
                 icon={BarChart3}
@@ -187,13 +187,13 @@ export default async function LandingPage() {
                 },
                 {
                   icon: Wifi,
-                  title: "Plug in the sensor",
+                  title: "Plug in the device",
                   text: "Power the board, join the “SmartAgri-Setup” Wi-Fi from your phone and pick your home network. Then press the board's BOOT button to add it to your account.",
                 },
                 {
                   icon: Smartphone,
                   title: "Let it look after the plants",
-                  text: "Connect the sensor to a pot and you're done. Watch moisture live, water by hand when you want, and get an alert if anything needs you.",
+                  text: "Connect the device to a pot and you're done. Watch moisture live, water by hand when you want, and get an alert if anything needs you.",
                 },
               ].map((step, index) => (
                 <li key={step.title} className="relative rounded-3xl border border-slate-200 bg-[#f7faf7] p-7 dark:border-slate-800 dark:bg-slate-950/60">
@@ -278,7 +278,7 @@ export default async function LandingPage() {
                 <Sprout size={34} className="mx-auto text-emerald-300" aria-hidden="true" />
                 <h2 className="mx-auto mt-5 max-w-2xl text-3xl font-black tracking-tight text-white sm:text-5xl">Never come home to a dry pot again.</h2>
                 <p className="mx-auto mt-5 max-w-xl text-lg leading-8 text-emerald-50/80">
-                  Start with your gardens and plants today — add the sensor whenever you&apos;re ready.
+                  Start with your gardens and plants today — add the device whenever you&apos;re ready.
                 </p>
                 <Link
                   href={primaryHref}
@@ -324,7 +324,7 @@ const FAQ = [
   },
   {
     q: "What happens if the Wi-Fi or electricity goes off?",
-    a: "If the board can't reach the app for about a minute, it turns the pump off by itself. When the connection comes back it carries on, and you get an alert that the sensor went offline and came back.",
+    a: "If the board can't reach the app for about a minute, it turns the pump off by itself. When the connection comes back it carries on, and you get an alert that the device went offline and came back.",
   },
   {
     q: "Can I still water by hand?",
@@ -443,7 +443,7 @@ function HeroPreview() {
           </div>
           <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-            Sensor live
+            Device live
           </span>
         </div>
 

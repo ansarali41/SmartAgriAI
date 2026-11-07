@@ -152,8 +152,11 @@ Then open **http://localhost:3000**, click **Sign in**, and use
 
 ### Extras
 - **Gardens / Pots / Plants** — create and delete records; counts update.
-- **Sensors** — register a device; the **device key is shown once** (use it on the
-  ESP32). "Last seen" updates as the device posts.
+- **Devices** — register a device; the **device key is shown once** (use it on the
+  ESP32). "Last seen" updates as the device posts (seconds under a minute). Status:
+  **Online** within 45 s of the last report, **Delayed** 45–90 s, **Offline** after 90 s
+  (`DEVICE_STALE_THRESHOLD_SECONDS` / `DEVICE_OFFLINE_THRESHOLD_SECONDS`). To test:
+  unplug the board — Delayed after ~45 s, Offline (with an alert) after ~90 s.
 - **Analytics** — historical charts + **Sensors CSV** / **Irrigation CSV** export.
 - **Notifications** — list, mark one / all as read.
 - **Settings** — edit farm profile and weather location.

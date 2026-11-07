@@ -94,7 +94,7 @@ export default function DashboardPage() {
           </span>
           <h2 className="mt-4 text-lg font-black">Let&apos;s set up your first garden</h2>
           <p className="mt-1 max-w-sm text-sm text-slate-500 dark:text-slate-400">
-            Create a garden, add a pot with its plant, then connect a sensor to see live moisture here.
+            Create a garden, add a pot with its plant, then connect a device to see live moisture here.
           </p>
           <Link href="/gardens" className="mt-5 inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-700">
             <Plus size={16} />
@@ -158,7 +158,7 @@ function useNow(intervalMs = 15000) {
 }
 
 function GardenOverview({ gardenId }: { gardenId: string }) {
-  const { data, error } = useSWR<DashboardData>(`/api/gardens/${gardenId}/dashboard`, { refreshInterval: 5000 });
+  const { data, error } = useSWR<DashboardData>(`/api/gardens/${gardenId}/dashboard`, { refreshInterval: 3000 });
   const now = useNow();
 
   if (error) return <Card className="py-10 text-center text-sm text-rose-600">Couldn&apos;t load this garden. It will retry automatically.</Card>;
@@ -183,7 +183,7 @@ function GardenOverview({ gardenId }: { gardenId: string }) {
       <HealthBanner alerts={data.alerts} gardenId={gardenId} gardenName={data.garden.name} />
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Kpi icon={Gauge} label="Average soil moisture" value={average == null ? "--" : `${average}%`} hint={liveValues.length ? `${liveValues.length} live sensor${liveValues.length > 1 ? "s" : ""}` : "No live readings"} />
+        <Kpi icon={Gauge} label="Average soil moisture" value={average == null ? "--" : `${average}%`} hint={liveValues.length ? `${liveValues.length} live device${liveValues.length > 1 ? "s" : ""}` : "No live readings"} />
         <Kpi icon={Droplets} label="Pots needing water" value={String(dry)} hint={`of ${data.pots.length} ${data.pots.length === 1 ? "pot" : "pots"}`} tone={dry ? "amber" : undefined} />
         <Kpi icon={Cpu} label="Devices online" value={`${online}`} hint={`of ${data.devices.length} ${data.devices.length === 1 ? "device" : "devices"}`} tone={data.devices.length && online < data.devices.length ? "rose" : undefined} />
         <Kpi icon={Droplets} label="Pumps running" value={`${pumpsOn}`} hint={pumpsOn ? "Watering now" : "All idle"} tone={pumpsOn ? "sky" : undefined} />
@@ -301,7 +301,7 @@ function PotTile({ pot, value, gardenId }: { pot: Pot; value: number | null; gar
   const noSensor = pot.sensors.length === 0;
   const state =
     noSensor
-      ? { text: "No sensor", tone: "text-slate-400", stroke: "#94a3b8" }
+      ? { text: "No device", tone: "text-slate-400", stroke: "#94a3b8" }
       : value == null
         ? { text: "Probe not reading", tone: "text-rose-600 dark:text-rose-400", stroke: "#94a3b8" }
         : value < low
@@ -330,7 +330,7 @@ function PotTile({ pot, value, gardenId }: { pot: Pot; value: number | null; gar
           {value == null ? null : <span className="ml-0.5 text-lg font-bold text-slate-400">%</span>}
         </p>
         {noSensor ? (
-          <span className="text-right text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">Connect a sensor →</span>
+          <span className="text-right text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">Connect a device →</span>
         ) : (
           <Sparkline points={pot.moistureHistory.map((point) => point.value)} low={low} high={high} stroke={state.stroke} />
         )}
@@ -342,7 +342,7 @@ function PotTile({ pot, value, gardenId }: { pot: Pot; value: number | null; gar
       <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3 text-[11px] dark:border-slate-800">
         <span className="inline-flex items-center gap-1 font-semibold text-slate-600 dark:text-slate-300">
           <span className={`h-1.5 w-1.5 rounded-full ${sensor ? deviceStatus(sensor.status).dot : "bg-slate-300 dark:bg-slate-600"}`} />
-          {sensor ? sensor.name : "No sensor"}
+          {sensor ? sensor.name : "No device"}
         </span>
         <span
           className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-semibold ${
@@ -459,7 +459,7 @@ function QuickActions({ gardenId }: { gardenId: string }) {
     { href: `/gardens/${gardenId}?tab=pots`, icon: Plus, title: "Add pot & plant", text: "Grow something new" },
     { href: "/irrigation", icon: Droplets, title: "Water a pot", text: "Pump & watering levels" },
     { href: "/disease-detection", icon: Microscope, title: "Check a leaf", text: "Disease AI scan" },
-    { href: "/sensors", icon: Cpu, title: "Add a device", text: "Connect a sensor" },
+    { href: "/sensors", icon: Cpu, title: "Add a device", text: "Connect it to a pot" },
   ];
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">

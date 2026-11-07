@@ -18,6 +18,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       predictedDisease: true,
       className: true,
       confidence: true,
+      details: true,
       createdAt: true,
       plantId: true,
       pot: { select: { id: true, label: true } },
@@ -61,5 +62,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     pot: prediction.pot,
     garden: prediction.garden,
     plant: prediction.plant,
+    // Alternatives, unsure flag, crop match (scans from before this was stored: null).
+    details: prediction.details ?? null,
   });
 }

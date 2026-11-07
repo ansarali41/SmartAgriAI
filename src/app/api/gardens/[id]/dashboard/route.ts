@@ -21,11 +21,11 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const garden = await prisma.garden.findFirst({
     where: { id, userId: gate },
     include: {
-      devices: { select: { id: true, name: true, type: true, hardwareId: true, status: true, lastSeenAt: true }, orderBy: { createdAt: "desc" } },
+      devices: { select: { id: true, name: true, type: true, hardwareId: true, status: true, lastSeenAt: true, portCount: true, portStatus: true, potMappings: { select: { port: true, pot: { select: { id: true, label: true } } }, orderBy: { port: "asc" } } }, orderBy: { createdAt: "desc" } },
       pots: {
         include: {
           plant: { select: { id: true, commonName: true, healthStatus: true } },
-          deviceMappings: { select: { device: { select: { id: true, name: true, lastSeenAt: true } } }, orderBy: { createdAt: "asc" } },
+          deviceMappings: { select: { port: true, device: { select: { id: true, name: true, lastSeenAt: true } } }, orderBy: { createdAt: "asc" } },
         },
         orderBy: { label: "asc" },
       },
@@ -63,10 +63,15 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const pots = garden.pots.map((pot) => {
     const moistureHistory = moistureByPot.get(pot.id) ?? [];
     const irrigationDecision = decisionHistory.find((event) => event.potId === pot.id) ?? null;
-    const sensors = pot.deviceMappings.map(({ device }) => ({ id: device.id, name: device.name, status: getDeviceConnectionStatus(device.lastSeenAt, now), lastSeenAt: device.lastSeenAt }));
+    const sensors = pot.deviceMappings.map(({ device, port }) => ({ id: device.id, name: device.name, port, status: getDeviceConnectionStatus(device.lastSeenAt, now), lastSeenAt: device.lastSeenAt }));
     return { id: pot.id, label: pot.label, irrigationMode: pot.irrigationMode, pumpState: pot.pumpState, moistureOnThreshold: pot.moistureOnThreshold, moistureOffThreshold: pot.moistureOffThreshold, soilType: pot.soilType, plant: pot.plant, currentMoisture: moistureHistory.at(-1)?.value ?? null, moistureRecordedAt: moistureHistory.at(-1)?.recordedAt ?? null, moistureHistory, irrigationDecision, sensors };
   });
-  const devices = garden.devices.map((device) => ({ ...device, status: getDeviceConnectionStatus(device.lastSeenAt, now) }));
+  const devices = garden.devices.map(({ potMappings, ...device }) => ({
+    ...device,
+    status: getDeviceConnectionStatus(device.lastSeenAt, now),
+    // Which pot each port waters.
+    ports: potMappings.map((m) => ({ port: m.port, potId: m.pot.id, potLabel: m.pot.label })),
+  }));
   const activeAlerts = buildGardenAlerts({ gardenId: garden.id, pots: pots.map((pot) => ({ id: pot.id, label: pot.label, plant: pot.plant, moisture: pot.currentMoisture, moistureOnThreshold: pot.moistureOnThreshold })), devices, weather, latestPredictions, failedCommands });
   const resolutions = await prisma.alertResolution.findMany({ where: { userId: gate, gardenId: id }, select: { alertKey: true, resolvedAt: true } });
   const { alerts, resolved: resolvedAlertList, resolvedCount, stale } = applyAlertResolutions(activeAlerts, resolutions);

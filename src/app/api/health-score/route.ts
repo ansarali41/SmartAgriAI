@@ -28,7 +28,7 @@ export async function GET(req: Request) {
     if (env.recordedAt === null && !latestDisease) {
       return NextResponse.json({
         healthScore: 0,
-        message: "No sensor data available yet",
+        message: "No device data available yet",
         factors: { moisture: 0, temperature: 0, humidity: 0, diseaseScore: 100 },
       });
     }

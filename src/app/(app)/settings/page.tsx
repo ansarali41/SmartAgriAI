@@ -73,7 +73,7 @@ export default function SettingsPage() {
             <div className="flex flex-wrap gap-2 pt-2 text-xs">
               <Chip icon={Trees} text={`${data._count.gardens} ${data._count.gardens === 1 ? "garden" : "gardens"}`} />
               <Chip icon={Package} text={`${data._count.pots} pots`} />
-              <Chip icon={Cpu} text={`${data._count.devices} ${data._count.devices === 1 ? "sensor" : "sensors"}`} />
+              <Chip icon={Cpu} text={`${data._count.devices} ${data._count.devices === 1 ? "device" : "devices"}`} />
               <Chip icon={CalendarDays} text={`Since ${new Date(data.createdAt).toLocaleDateString(undefined, { month: "short", year: "numeric" })}`} />
             </div>
           ) : null}
@@ -401,7 +401,7 @@ interface TelegramStatus {
   lastError: { code: string; at: string } | null;
 }
 
-const ALERT_TYPES = ["Pump turned on/off", "Pump command failed", "Sensor offline", "Sensor back online", "Disease scan result"];
+const ALERT_TYPES = ["Pump turned on/off", "Pump command failed", "Device offline", "Device back online", "Disease scan result"];
 
 const code = "rounded bg-slate-100 px-1 py-px font-mono text-[12px] dark:bg-slate-800";
 
@@ -472,7 +472,7 @@ function TelegramCard() {
     <Section
       icon={Send}
       title="Telegram alerts"
-      subtitle="Get pump, sensor and disease alerts on your phone."
+      subtitle="Get pump, device and disease alerts on your phone."
       action={
         data ? (
           <span

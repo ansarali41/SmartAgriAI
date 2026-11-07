@@ -308,7 +308,8 @@ function QrWalkthrough({ serverUrl }: { serverUrl: string }) {
       title: "Join the board's Wi-Fi",
       text: (
         <>
-          Point your phone camera here and tap the notification. Your phone joins <b>{SETUP_AP}</b>.
+          Open your phone&apos;s <b>Camera</b> (or Google Lens), point it at this code and tap the pop-up. Your phone joins{" "}
+          <b>{SETUP_AP}</b>.
         </>
       ),
     },
@@ -317,8 +318,8 @@ function QrWalkthrough({ serverUrl }: { serverUrl: string }) {
       title: "Open the setup page",
       text: (
         <>
-          The server address is already filled in. Tap <b>Configure WiFi</b>, pick your home Wi-Fi, enter its password and tap{" "}
-          <b>Save</b>.
+          Scan again to open the board&apos;s page with this server&apos;s address filled in. Tap <b>Configure WiFi</b>, pick your
+          home Wi-Fi, type its password and tap <b>Save</b>.
         </>
       ),
     },
@@ -361,6 +362,17 @@ function QrWalkthrough({ serverUrl }: { serverUrl: string }) {
         ) : (
           <span className="text-xs text-slate-500 dark:text-slate-400">Saved? Your board appears below.</span>
         )}
+      </span>
+      <span className="mt-4 block rounded-lg bg-slate-50 p-3 text-xs leading-relaxed text-slate-600 dark:bg-slate-800/60 dark:text-slate-300">
+        <b className="text-slate-800 dark:text-slate-100">Only have your phone?</b> You can&apos;t scan your own screen — skip the codes: open
+        your phone&apos;s <b>Wi-Fi settings</b>, join <b>{SETUP_AP}</b>, and the board&apos;s page opens by itself (if not, open{" "}
+        <b>192.168.4.1</b> in the browser).
+        {serverUrl ? (
+          <>
+            {" "}
+            If the address field is empty, enter <b className="break-all">{serverUrl}</b>.
+          </>
+        ) : null}
       </span>
     </span>
   );
@@ -482,7 +494,7 @@ function ClaimStep({
       <Input label="Device name" value={name} onChange={setName} required />
       {!effectivePotId ? (
         <p className="-mt-1 text-xs text-slate-500 dark:text-slate-400">
-          You can place it later from Sensors → ⋮ → Assign, or a pot&apos;s “Connect a sensor”. It shows as online meanwhile.
+          You can place it later from Devices → ⋮ → Assign, or a pot&apos;s “Connect a device”. It shows as online meanwhile.
         </p>
       ) : null}
 

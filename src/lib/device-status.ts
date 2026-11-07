@@ -1,7 +1,8 @@
 export type DeviceConnectionStatus = "NEVER_SEEN" | "ONLINE" | "STALE" | "OFFLINE";
 
-export const DEFAULT_DEVICE_STALE_THRESHOLD_SECONDS = 60;
-export const DEFAULT_DEVICE_OFFLINE_THRESHOLD_SECONDS = 120;
+// The board reports every 20 s: two missed reports = delayed, four = offline.
+export const DEFAULT_DEVICE_STALE_THRESHOLD_SECONDS = 45;
+export const DEFAULT_DEVICE_OFFLINE_THRESHOLD_SECONDS = 90;
 
 type Environment = Record<string, string | undefined>;
 

@@ -28,6 +28,7 @@ import {
   Package,
   Pencil,
   Plus,
+  Gauge,
   Sun,
   Trash2,
   TriangleAlert,
@@ -40,7 +41,8 @@ import { SlideOver } from "@/components/SlideOver";
 import { AddDevicePanel, AddPlantingPanel, EditPotPanel, type EditablePot } from "@/components/GardenSetupPanels";
 import { AddDeviceGuide } from "@/components/AddDeviceGuide";
 import { useDismiss } from "@/components/HeaderMenus";
-import { DEVICE_TYPE_LABELS, deviceStatus, timeAgo } from "@/components/device-ui";
+import { deviceStatus, timeAgo } from "@/components/device-ui";
+import { supportsRemotePorts } from "@/lib/device-pot";
 import {
   GardenFields,
   emptyForm,
@@ -76,7 +78,20 @@ interface GardenActivity {
     fetchedAt: string;
   } | null;
   weatherUnavailable: boolean;
-  devices: { id: string; name: string; type: string; hardwareId: string; status: string; lastSeenAt: string | null }[];
+  devices: {
+    id: string;
+    name: string;
+    type: string;
+    hardwareId: string;
+    status: string;
+    lastSeenAt: string | null;
+    /** Ports set up on the board (1–6). */
+    portCount?: number;
+    /** Last report per port: probe reading (null = not reading) and pump state. */
+    portStatus?: { port: number; moisture: number | null; pump: boolean | null }[] | null;
+    /** Which pot each port waters. */
+    ports?: { port: number; potId: string; potLabel: string }[];
+  }[];
   pots: {
     id: string;
     label: string;
@@ -88,7 +103,8 @@ interface GardenActivity {
     plant: { id: string; commonName: string; healthStatus: string } | null;
     currentMoisture: number | null;
     moistureRecordedAt: string | null;
-    sensors: { id: string; name: string; status: string; lastSeenAt: string | null }[];
+    /** The device connected to this pot, and the port of it that this pot uses. */
+    sensors: { id: string; name: string; port?: number; status: string; lastSeenAt: string | null }[];
   }[];
   pumpHistory: { id: string; potId: string | null; mode: string; status: string; reason: string | null; startedAt: string }[];
   diseaseHistory: { id: string; potId: string; predictedDisease: string; className: string | null; confidence: number; createdAt: string }[];
@@ -137,7 +153,7 @@ function GardenDetails() {
   const { data: garden, error, mutate } = useSWR<GardenDetail>(id ? `/api/gardens/${id}` : null);
   const { data: activity, mutate: mutateActivity } = useSWR<GardenActivity>(
     id ? `/api/gardens/${id}/dashboard` : null,
-    { refreshInterval: 5000 },
+    { refreshInterval: 3000 },
   );
   const selectedId = useSyncExternalStore(subscribeSelected, getSelectedGardenId, () => null);
   const [tab, setTab] = useState<Tab>(() =>
@@ -175,6 +191,11 @@ function GardenDetails() {
   const alerts = activity?.alerts ?? [];
   const online = devices.filter((device) => device.status === "ONLINE").length;
   const pumpsOn = pots.filter((pot) => pot.pumpState === "on").length;
+  // Soil probes across this garden's boards: set up vs. actually reading now.
+  const probeTotal = devices.reduce((sum, device) => sum + (device.portCount ?? 1), 0);
+  const probesReading = devices
+    .filter((device) => device.status === "ONLINE" || device.status === "STALE")
+    .reduce((sum, device) => sum + (device.portStatus ?? []).filter((p) => p.port <= (device.portCount ?? 1) && p.moisture != null).length, 0);
   const hasCoordinates = garden.lat != null && garden.lng != null;
   const potLabel = (potId: string | null) => pots.find((pot) => pot.id === potId)?.label ?? "Garden";
 
@@ -227,7 +248,7 @@ function GardenDetails() {
   async function remove() {
     const ok = await confirm({
       title: `Delete “${garden!.name}”?`,
-      message: `Its ${garden!._count.pots} pots, ${garden!._count.plants} plants, devices and all sensor history will be removed. This can't be undone.`,
+      message: `Its ${garden!._count.pots} pots, ${garden!._count.plants} plants, devices and all reading history will be removed. This can't be undone.`,
       confirmLabel: "Delete garden",
       tone: "danger",
     });
@@ -305,7 +326,7 @@ function GardenDetails() {
       </header>
 
       {/* Key numbers (shown on every tab) */}
-      <div className="my-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="my-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <Stat icon={Package} label="Pots" value={garden._count.pots} onClick={() => setTab("pots")} />
         <Stat icon={Flower2} label="Plants" value={garden._count.plants} onClick={() => setTab("pots")} />
         <Stat
@@ -313,6 +334,13 @@ function GardenDetails() {
           label="Devices online"
           value={online}
           suffix={`of ${garden._count.devices}`}
+          onClick={() => setTab("devices")}
+        />
+        <Stat
+          icon={Gauge}
+          label="Probes reading"
+          value={probesReading}
+          suffix={`of ${probeTotal}`}
           onClick={() => setTab("devices")}
         />
         <Stat
@@ -486,7 +514,6 @@ function GardenDetails() {
                 <DeviceCard
                   key={device.id}
                   device={device}
-                  pots={pots.filter((pot) => pot.sensors.some((sensor) => sensor.id === device.id))}
                   onConnect={() => setTab("pots")}
                 />
               ))}
@@ -1183,7 +1210,7 @@ function PotCard({
   const high = Math.max(pot.moistureOffThreshold ?? low, low);
   const state =
     noSensor
-      ? { text: "No sensor", tone: "text-slate-400", bar: "bg-slate-300" }
+      ? { text: "No device", tone: "text-slate-400", bar: "bg-slate-300" }
       : probeFault
       ? { text: "Probe not reading", tone: "text-rose-600 dark:text-rose-400", bar: "bg-slate-300" }
       : moisture == null
@@ -1398,24 +1425,71 @@ function PotSensor({
   useDismiss(open, close, rootRef, triggerRef);
 
   const connectedIds = new Set(pot.sensors.map((sensor) => sensor.id));
-  // Devices added without a garden can be placed here too (they join this garden).
-  const { data: allDevices } = useSWR<{ id: string; name: string; status: string; gardenId: string | null }[]>("/api/devices");
-  const unassigned = (allDevices ?? []).filter((device) => !device.gardenId);
-  const available = [
-    ...devices.filter((device) => !connectedIds.has(device.id)),
-    ...unassigned.map((device) => ({ ...device, unassigned: true as const })),
-  ];
+  // Boards in this garden — or not in a garden yet (they join it) — that still
+  // have a free port (each port serves one pot).
+  const { data: allDevices } = useSWR<
+    {
+      id: string;
+      name: string;
+      status: string;
+      gardenId: string | null;
+      portCount: number;
+      firmwareVersion: string | null;
+      portStatus: { port: number; moisture: number | null }[] | null;
+      pots: { id: string; label: string; port: number }[];
+    }[]
+  >("/api/devices");
+  // Each board's free ports, plus the next new port where the board can grow
+  // (firmware 2.9+, up to 6). This garden's boards, or ones not in a garden yet.
+  const available = (allDevices ?? [])
+    .filter((device) => !connectedIds.has(device.id))
+    .filter((device) => !device.gardenId || devices.some((d) => d.id === device.id))
+    .map((device) => {
+      const used = new Set(device.pots.map((p) => p.port));
+      const free = Array.from({ length: device.portCount }, (_, i) => i + 1).filter((n) => !used.has(n));
+      const newPort = supportsRemotePorts(device.firmwareVersion) && device.portCount < 6 ? device.portCount + 1 : null;
+      const live = device.status === "ONLINE" || device.status === "STALE";
+      const reading = new Map((live ? (device.portStatus ?? []) : []).map((p) => [p.port, p.moisture]));
+      return { ...device, unassigned: !device.gardenId, free, newPort, reading };
+    })
+    .filter((device) => device.free.length > 0 || device.newPort !== null);
   const primary = pot.sensors[0];
+  // The connected board's other free ports (and a new one), to move this pot to.
+  const board = primary ? (allDevices ?? []).find((device) => device.id === primary.id) : undefined;
+  const moveTargets = board
+    ? [
+        ...Array.from({ length: board.portCount }, (_, i) => i + 1).filter((n) => !board.pots.some((p) => p.port === n)),
+        ...(supportsRemotePorts(board.firmwareVersion) && board.portCount < 6 ? [board.portCount + 1] : []),
+      ]
+    : [];
+
+  async function moveTo(port: number) {
+    if (!board || !primary) return;
+    setOpen(false);
+    setBusy(true);
+    try {
+      // A new port: grow the board first, then move the pot onto it.
+      if (port > board.portCount) await apiPatch(`/api/devices/${board.id}`, { portCount: port });
+      await apiPatch(`/api/devices/${board.id}`, { ports: [{ port, potId: pot.id }] });
+      onChange();
+      toast.success(`${pot.label} moved to port ${port} of ${board.name}.`);
+    } catch (err) {
+      toast.error(errorMessage(err, "Couldn't move the pot."));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const { confirm, toast } = useFeedback();
 
-  async function change(method: "POST" | "DELETE", deviceId: string) {
+  async function change(method: "POST" | "DELETE", deviceId: string, port?: number) {
     setOpen(false);
-    const deviceName = [...pot.sensors, ...available].find((device) => device.id === deviceId)?.name ?? "the sensor";
+    const deviceName = [...pot.sensors, ...available].find((device) => device.id === deviceId)?.name ?? "the device";
     if (method === "DELETE") {
+      const onPort = pot.sensors.find((sensor) => sensor.id === deviceId)?.port;
       const ok = await confirm({
-        title: `Disconnect ${deviceName}?`,
-        message: `${pot.label} stops getting soil readings and automatic watering until a sensor is connected again. The device stays online and can be connected to another pot.`,
+        title: `Disconnect ${pot.label}${onPort ? ` from port ${onPort}` : ""}?`,
+        message: `Only this pot is disconnected — ${onPort ? `port ${onPort} on ` : ""}${deviceName} becomes free for another pot. The device keeps running, and its other ports and pots aren't affected. ${pot.label} gets no readings or automatic watering until it's connected again.`,
         confirmLabel: "Disconnect",
         tone: "danger",
       });
@@ -1427,13 +1501,19 @@ function PotSensor({
       const response = await fetch(`/api/pots/${pot.id}/devices`, {
         method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ deviceId }),
+        body: JSON.stringify(port ? { deviceId, port } : { deviceId }),
       });
       if (!response.ok) throw new Error(((await response.json().catch(() => ({}))) as { error?: string }).error);
       onChange();
-      toast.success(method === "DELETE" ? `${deviceName} disconnected from ${pot.label}` : `${deviceName} connected to ${pot.label}`);
+      toast.success(
+        method === "DELETE"
+          ? `${pot.label} disconnected — the port is free again`
+          : port
+            ? `${pot.label} connected to port ${port} of ${deviceName}`
+            : `${deviceName} connected to ${pot.label}`,
+      );
     } catch (err) {
-      toast.error(errorMessage(err, "Couldn't update the sensor."));
+      toast.error(errorMessage(err, "Couldn't update the device."));
     } finally {
       setBusy(false);
     }
@@ -1456,14 +1536,17 @@ function PotSensor({
                 {primary.name}
                 {pot.sensors.length > 1 ? <span className="font-normal text-slate-400"> +{pot.sensors.length - 1} more</span> : null}
               </p>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400">{deviceStatus(primary.status).label}</p>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                {deviceStatus(primary.status).label}
+                {primary.port ? <> · <b className="font-semibold text-slate-600 dark:text-slate-300">Port {primary.port}</b></> : null}
+              </p>
             </div>
             <button
               ref={triggerRef}
               type="button"
               onClick={() => setOpen((value) => !value)}
               disabled={busy}
-              aria-label={`Sensor options for ${pot.label}`}
+              aria-label={`Device options for ${pot.label}`}
               aria-haspopup="menu"
               aria-expanded={open}
               className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50 dark:hover:bg-slate-800 dark:hover:text-slate-200"
@@ -1485,7 +1568,7 @@ function PotSensor({
               {busy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={15} />}
             </span>
             <span className="min-w-0 leading-tight">
-              <span className="block text-xs font-semibold text-emerald-700 dark:text-emerald-300">Connect a sensor</span>
+              <span className="block text-xs font-semibold text-emerald-700 dark:text-emerald-300">Connect a device</span>
               <span className="block text-[11px] text-slate-500 dark:text-slate-400">So moisture updates automatically</span>
             </span>
           </button>
@@ -1504,22 +1587,85 @@ function PotSensor({
             ) : null}
             {pot.sensors.length === 0 && available.length ? (
               <>
-                <p className="px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Use existing</p>
+                <p className="px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Use a port on</p>
                 {available.map((device) => (
-                  <button key={device.id} role="menuitem" type="button" onClick={() => change("POST", device.id)} className={itemClass}>
-                    <span className={`h-2 w-2 shrink-0 rounded-full ${deviceStatus(device.status).dot}`} />
-                    <span className="truncate">{device.name}</span>
-                    {"unassigned" in device ? <span className="ml-auto shrink-0 text-[10px] font-semibold text-amber-600 dark:text-amber-400">new</span> : null}
-                  </button>
+                  <div key={device.id} className="px-2.5 pb-2">
+                    <p className="flex items-center gap-2 pb-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200">
+                      <span className={`h-2 w-2 shrink-0 rounded-full ${deviceStatus(device.status).dot}`} />
+                      <span className="truncate">{device.name}</span>
+                      {device.unassigned ? (
+                        <span className="ml-auto shrink-0 text-[10px] font-semibold text-amber-600 dark:text-amber-400">joins this garden</span>
+                      ) : null}
+                    </p>
+                    <div className="flex flex-wrap gap-1">
+                      {device.free.map((port) => {
+                        const value = device.reading.get(port);
+                        return (
+                          <button
+                            key={port}
+                            role="menuitem"
+                            type="button"
+                            onClick={() => change("POST", device.id, port)}
+                            title={value != null ? `Port ${port}: a probe is reading ${Math.round(value)}% here` : `Port ${port} is free`}
+                            className="inline-flex flex-col items-start rounded-lg border border-slate-200 px-2 py-1 text-left hover:border-emerald-400 hover:bg-emerald-50/60 dark:border-slate-700 dark:hover:border-emerald-500/50 dark:hover:bg-emerald-500/5"
+                          >
+                            <span className="text-[11px] font-bold">Port {port}</span>
+                            <span className={`text-[10px] ${value != null ? "text-emerald-600 dark:text-emerald-400" : "text-slate-400"}`}>
+                              {value != null ? `probe ${Math.round(value)}%` : "no probe yet"}
+                            </span>
+                          </button>
+                        );
+                      })}
+                      {device.newPort ? (
+                        <button
+                          role="menuitem"
+                          type="button"
+                          onClick={() => change("POST", device.id, device.newPort!)}
+                          title={`Adds port ${device.newPort} to ${device.name}`}
+                          className="inline-flex flex-col items-start rounded-lg border border-dashed border-slate-300 px-2 py-1 text-left hover:border-emerald-400 hover:bg-emerald-50/60 dark:border-slate-700 dark:hover:border-emerald-500/50 dark:hover:bg-emerald-500/5"
+                        >
+                          <span className="text-[11px] font-bold text-emerald-700 dark:text-emerald-300">+ Port {device.newPort}</span>
+                          <span className="text-[10px] text-slate-400">new port</span>
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
                 ))}
               </>
             ) : null}
             {pot.sensors.length ? (
               <>
-                {/* One sensor per pot: disconnect it before connecting another. */}
                 <p className="px-2.5 pb-1.5 pt-1 text-[11px] leading-snug text-slate-500 dark:text-slate-400">
-                  A pot has one sensor. Disconnect this one to connect a different device.
+                  {pot.label} uses{" "}
+                  <b className="font-semibold text-slate-700 dark:text-slate-200">
+                    {primary?.port ? `port ${primary.port}` : "a port"} on {primary?.name}
+                  </b>{" "}
+                  — its soil probe and its pump.
                 </p>
+                {moveTargets.length ? (
+                  <div className="px-2.5 pb-2">
+                    <p className="pb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Move to another port</p>
+                    <div className="flex flex-wrap gap-1">
+                      {moveTargets.map((port) => {
+                        const isNew = board ? port > board.portCount : false;
+                        return (
+                          <button
+                            key={port}
+                            role="menuitem"
+                            type="button"
+                            onClick={() => moveTo(port)}
+                            className={`rounded-lg border px-2 py-1 text-[11px] font-bold hover:border-emerald-400 hover:bg-emerald-50/60 dark:hover:border-emerald-500/50 dark:hover:bg-emerald-500/5 ${
+                              isNew ? "border-dashed border-slate-300 text-emerald-700 dark:border-slate-700 dark:text-emerald-300" : "border-slate-200 dark:border-slate-700"
+                            }`}
+                          >
+                            {isNew ? `+ Port ${port}` : `Port ${port}`}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
+                <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
                 {pot.sensors.map((sensor) => (
                   <button
                     key={sensor.id}
@@ -1528,8 +1674,11 @@ function PotSensor({
                     onClick={() => change("DELETE", sensor.id)}
                     className={`${itemClass} text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-500/10`}
                   >
-                    <X size={14} />
-                    <span className="truncate">Disconnect {sensor.name}</span>
+                    <X size={14} className="shrink-0" />
+                    <span className="min-w-0 leading-tight">
+                      <span className="block truncate">Disconnect from {sensor.port ? `port ${sensor.port}` : sensor.name}</span>
+                      <span className="block text-[10px] font-normal text-slate-400">Frees the port — the device keeps running</span>
+                    </span>
                   </button>
                 ))}
               </>
@@ -1542,18 +1691,20 @@ function PotSensor({
   );
 }
 
+const MAX_PORTS = 6;
+
 function DeviceCard({
   device,
-  pots,
   onConnect,
 }: {
   device: GardenActivity["devices"][number];
-  /** Pots this device is connected to. */
-  pots: { id: string; label: string }[];
   onConnect: () => void;
 }) {
+  const portCount = device.portCount ?? 1;
+  const links = device.ports ?? [];
+  const inUse = links.length;
   // Online but not connected to a pot: its soil readings aren't saved anywhere.
-  const unlinked = device.status === "ONLINE" && pots.length === 0;
+  const unlinked = device.status === "ONLINE" && inUse === 0;
   const status = unlinked
     ? {
         ...deviceStatus(device.status),
@@ -1563,61 +1714,117 @@ function DeviceCard({
         hint: "Online, but its readings aren't saved until it's connected to a pot.",
       }
     : deviceStatus(device.status);
+  const live = device.status === "ONLINE" || device.status === "STALE";
+  const report = new Map((live ? (device.portStatus ?? []) : []).map((p) => [p.port, p]));
+  const free = MAX_PORTS - inUse;
+
   return (
     <article className="flex flex-col rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
-      <header className="flex items-start gap-3 p-4">
+      <header className="flex items-start gap-3 p-4 pb-3">
         <span className="relative grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-300">
           <Cpu size={19} />
           <span className={`absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full ring-2 ring-white dark:ring-slate-900 ${status.dot}`} />
         </span>
         <div className="min-w-0 flex-1">
           <h3 className="truncate font-bold leading-tight">{device.name}</h3>
-          <p className="mt-0.5 truncate text-xs text-slate-500 dark:text-slate-400">
-            {DEVICE_TYPE_LABELS[device.type] ?? device.type}
+          <p className="mt-0.5 truncate font-mono text-[11px] text-slate-500 dark:text-slate-400">{device.hardwareId}</p>
+        </div>
+        <div className="shrink-0 text-right">
+          <span className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-bold ${status.pill}`}>{status.label}</span>
+          <p className="mt-1 text-[11px] text-slate-400" title={device.lastSeenAt ? formatDateTime(device.lastSeenAt) : undefined}>
+            {device.lastSeenAt ? timeAgo(device.lastSeenAt) : "Never seen"}
           </p>
         </div>
-        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-bold ${status.pill}`}>{status.label}</span>
       </header>
 
-      <dl className="space-y-2 px-4 pb-4 text-xs">
-        <div className="flex items-center justify-between gap-3">
-          <dt className="text-slate-500 dark:text-slate-400">Hardware ID</dt>
-          <dd className="truncate font-mono text-[11px] font-semibold">{device.hardwareId}</dd>
+      {/* Ports: 6 slots — in use, set up but free, and not set up yet */}
+      <div className="px-4 pb-4">
+        <div className="mb-2 flex items-end justify-between gap-2">
+          <p className="text-xs font-bold text-slate-700 dark:text-slate-200">Ports</p>
+          <p className="text-[11px] text-slate-500 dark:text-slate-400">
+            <b className="text-slate-900 dark:text-white">{inUse}</b> of {MAX_PORTS} in use ·{" "}
+            <b className="text-emerald-600 dark:text-emerald-400">{free}</b> free
+          </p>
         </div>
-        <div className="flex items-center justify-between gap-3">
-          <dt className="text-slate-500 dark:text-slate-400">Last seen</dt>
-          <dd className="font-semibold" title={device.lastSeenAt ? formatDateTime(device.lastSeenAt) : undefined}>
-            {device.lastSeenAt ? timeAgo(device.lastSeenAt) : "Never"}
-          </dd>
+        {/* Usage bar */}
+        <div className="mb-2.5 flex gap-1" aria-hidden="true">
+          {Array.from({ length: MAX_PORTS }, (_, i) => i + 1).map((port) => (
+            <span
+              key={port}
+              className={`h-1.5 flex-1 rounded-full ${
+                links.some((l) => l.port === port)
+                  ? "bg-emerald-500"
+                  : port <= portCount
+                    ? "bg-emerald-200 dark:bg-emerald-500/30"
+                    : "bg-slate-200 dark:bg-slate-800"
+              }`}
+            />
+          ))}
         </div>
-        <div className="flex items-start justify-between gap-3">
-          <dt className="shrink-0 text-slate-500 dark:text-slate-400">Feeds</dt>
-          <dd className="flex flex-wrap justify-end gap-1">
-            {pots.length ? (
-              pots.map((pot) => (
-                <span key={pot.id} className="rounded-md bg-emerald-50 px-1.5 py-0.5 text-[11px] font-semibold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">
-                  {pot.label}
+        <ul className="grid grid-cols-3 gap-1.5">
+          {Array.from({ length: MAX_PORTS }, (_, i) => i + 1).map((port) => {
+            const link = links.find((l) => l.port === port);
+            const r = report.get(port);
+            const setUp = port <= portCount;
+            if (!setUp) {
+              return (
+                <li key={port}>
+                  <Link
+                    href="/sensors"
+                    title="Add this port on the Devices page (wire a probe + relay)"
+                    className="flex h-full flex-col rounded-lg border border-dashed border-slate-200 px-2 py-1.5 text-slate-400 transition hover:border-emerald-400 hover:text-emerald-600 dark:border-slate-700 dark:hover:border-emerald-500/50 dark:hover:text-emerald-400"
+                  >
+                    <span className="text-[10px] font-bold uppercase tracking-wide">Port {port}</span>
+                    <span className="mt-0.5 inline-flex items-center gap-0.5 text-[11px] font-semibold">
+                      <Plus size={11} /> Add
+                    </span>
+                  </Link>
+                </li>
+              );
+            }
+            return (
+              <li
+                key={port}
+                className={`flex flex-col rounded-lg px-2 py-1.5 ${
+                  link ? "bg-emerald-50/70 dark:bg-emerald-500/10" : "bg-slate-50 dark:bg-slate-950/60"
+                }`}
+              >
+                <span className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                  Port {port}
+                  <span
+                    title={r?.pump ? "Pump on" : "Pump off"}
+                    className={`h-1.5 w-1.5 rounded-full ${r?.pump ? "bg-sky-500" : "bg-slate-300 dark:bg-slate-600"}`}
+                  />
                 </span>
-              ))
-            ) : (
-              <span className="text-slate-400">No pot yet</span>
-            )}
-          </dd>
-        </div>
-      </dl>
+                {link ? (
+                  <span className="truncate text-xs font-bold text-emerald-700 dark:text-emerald-300">{link.potLabel}</span>
+                ) : (
+                  <button type="button" onClick={onConnect} className="text-left text-[11px] font-semibold text-amber-600 hover:underline dark:text-amber-400">
+                    Free · connect
+                  </button>
+                )}
+                <span
+                  className={`text-[11px] tabular-nums ${
+                    !r ? "text-slate-400" : r.moisture != null ? "text-slate-600 dark:text-slate-300" : "text-amber-600 dark:text-amber-400"
+                  }`}
+                >
+                  {!r ? "—" : r.moisture != null ? `Probe ${Math.round(r.moisture)}%` : "No probe"}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
 
       <div className="mt-auto flex items-center justify-between gap-2 border-t border-slate-100 px-4 py-2.5 text-[11px] text-slate-500 dark:border-slate-800 dark:text-slate-400">
         <span>{status.hint}</span>
-        {pots.length === 0 ? (
-          <button type="button" onClick={onConnect} className="shrink-0 font-semibold text-emerald-600 hover:underline dark:text-emerald-400">
-            Connect to a pot →
-          </button>
-        ) : null}
+        <Link href="/sensors" className="shrink-0 font-semibold text-emerald-600 hover:underline dark:text-emerald-400">
+          Manage →
+        </Link>
       </div>
     </article>
   );
 }
-
 
 function ActivePill({ active }: { active: boolean }) {
   return active ? (

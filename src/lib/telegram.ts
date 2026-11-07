@@ -122,7 +122,17 @@ export function looksLikeBotToken(value: string) {
   return isValidBotToken(value.trim());
 }
 
-async function callTelegram<T>(token: string, method: string, fetchImpl: FetchLike = fetch): Promise<{ ok: true; result: T } | { ok: false; status: number; description?: string }> {
+type TelegramCallResult<T> = { ok: true; result: T } | { ok: false; status: number; description?: string };
+
+async function callTelegram<T>(token: string, method: string, fetchImpl: FetchLike = fetch): Promise<TelegramCallResult<T>> {
+  const first = await callTelegramOnce<T>(token, method, fetchImpl);
+  // status 0 = the request never got an answer (DNS/TLS/timeout). One quick retry
+  // smooths over a flaky connection before we tell the user Telegram is unreachable.
+  if (first.ok || first.status !== 0) return first;
+  return callTelegramOnce<T>(token, method, fetchImpl);
+}
+
+async function callTelegramOnce<T>(token: string, method: string, fetchImpl: FetchLike): Promise<TelegramCallResult<T>> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
   try {
@@ -130,7 +140,12 @@ async function callTelegram<T>(token: string, method: string, fetchImpl: FetchLi
     const payload = (await response.json().catch(() => null)) as { ok?: boolean; result?: T; description?: string } | null;
     if (!response.ok || payload?.ok !== true) return { ok: false, status: response.status, description: payload?.description };
     return { ok: true, result: payload.result as T };
-  } catch {
+  } catch (error) {
+    const cause = (error as { cause?: { code?: string; message?: string } })?.cause;
+    console.warn(
+      `[telegram] ${method} failed:`,
+      isAbortError(error) ? `timeout after ${DEFAULT_TIMEOUT_MS}ms` : (cause?.code ?? cause?.message ?? (error as Error)?.message ?? error),
+    );
     return { ok: false, status: 0 };
   } finally {
     clearTimeout(timeout);

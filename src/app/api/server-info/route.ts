@@ -10,6 +10,12 @@ export async function GET(req: Request) {
   if (gate instanceof NextResponse) return gate;
 
   const url = new URL(req.url);
+  // Deployed (e.g. Vercel): the public address is the only one a board can reach.
+  if (process.env.VERCEL) {
+    const host = req.headers.get("x-forwarded-host") ?? url.host;
+    const proto = req.headers.get("x-forwarded-proto") ?? "https";
+    return NextResponse.json({ serverUrls: [`${proto}://${host}`] });
+  }
   const port = url.port || (url.protocol === "https:" ? "443" : "80");
   const suffix = ["80", "443"].includes(port) ? "" : `:${port}`;
   const addresses = Object.values(os.networkInterfaces())

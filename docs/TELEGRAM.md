@@ -16,8 +16,8 @@ Each user connects their **own** Telegram bot from the app — nothing goes in `
 
 ## What gets sent
 
-Pump turned on/off (acknowledged by the board), pump command failed, sensor
-offline, sensor back online, disease scan result. Every category is on by default;
+Pump turned on/off (acknowledged by the board), pump command failed, device
+offline, device back online, disease scan result. Every category is on by default;
 optionally set any of these to `false` to turn one off for everyone:
 `TELEGRAM_NOTIFY_PUMP_ACKNOWLEDGED`, `TELEGRAM_NOTIFY_PUMP_FAILED`,
 `TELEGRAM_NOTIFY_DISEASE_ANALYSIS`, `TELEGRAM_NOTIFY_DEVICE_OFFLINE`,

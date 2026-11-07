@@ -13,7 +13,7 @@ import { formatDeviceRecoveredNotification } from "@/lib/business-notifications"
 import { enqueueTelegramDelivery } from "@/lib/telegram-delivery-enqueue";
 import { deviceRecoveryEventKey } from "@/lib/device-monitoring";
 import { createAppNotification } from "@/lib/notify";
-import { pickPotForReading } from "@/lib/device-pot";
+import { MAX_PORTS, pickPotForReading } from "@/lib/device-pot";
 import type { Metric, Prisma } from "@prisma/client";
 
 const metricObjectSchema = z
@@ -26,9 +26,13 @@ const metricObjectSchema = z
   })
   .passthrough();
 
+const portSchema = z.number().int().min(1).max(MAX_PORTS);
+
 const potReadingSchema = z
   .object({
-    potId: z.string().min(1),
+    // A multi-pot board sends its port; the simulator / older clients may send potId.
+    potId: z.string().min(1).optional(),
+    port: portSchema.optional(),
     soilMoisture: z.number().min(0).max(100).optional(),
     soil_moisture: z.number().min(0).max(100).optional(),
     moisture: z.number().min(0).max(100).optional(),
@@ -41,6 +45,11 @@ const bodySchema = z
     hardwareId: z.string().min(1).optional(),
     deviceId: z.string().min(1).optional(),
     potId: z.string().min(1).optional(),
+    port: portSchema.optional(),
+    // How many ports (pots) this board serves — firmware 2.7+.
+    ports: portSchema.optional(),
+    // e.g. "smartagri-2.9" — shown in the app, and tells it whether ports can be set remotely.
+    firmware: z.string().trim().max(40).optional(),
     soilMoisture: z.number().min(0).max(100).optional(),
     // Canonical wire format. Keep soilMoisture for deployed legacy clients.
     soil_moisture: z.number().min(0).max(100).optional(),
@@ -78,6 +87,7 @@ function isFreshMoistureReading(recordedAt: Date) {
 
 type PotReadingInput = {
   potId?: string;
+  port?: number;
   soilMoisture?: number;
   pump?: boolean;
 };
@@ -94,10 +104,24 @@ function getPotReadingMoisture(reading: z.infer<typeof potReadingSchema>) {
   return reading.soilMoisture ?? reading.soil_moisture ?? reading.moisture;
 }
 
+/** What each port reported (probe reading or null, pump state) — shown on the Devices page. */
+function getPortStatus(readings: unknown) {
+  if (!Array.isArray(readings)) return null;
+  const ports = (readings as z.infer<typeof potReadingSchema>[])
+    .filter((r) => r.port !== undefined)
+    .map((r) => {
+      const moisture = getPotReadingMoisture(r);
+      return { port: r.port!, moisture: moisture === undefined ? null : normalizeMoisture(moisture), pump: r.pump ?? null };
+    })
+    .sort((a, b) => a.port - b.port);
+  return ports.length ? ports : null;
+}
+
+/** The pot a reading belongs to; null = it came from a port that isn't connected (skip it). */
 async function resolvePotId(
   input: PotReadingInput,
   device: { id: string; userId: string; gardenId: string },
-) {
+): Promise<string | null> {
   if (input.potId) {
     const pot = await prisma.pot.findFirst({
       where: {
@@ -124,13 +148,12 @@ async function resolvePotId(
     return pot.id;
   }
 
-  const mappings = await prisma.devicePotMapping.findMany({
+  const links = await prisma.devicePotMapping.findMany({
     where: { deviceId: device.id, pot: { userId: device.userId, gardenId: device.gardenId } },
-    select: { potId: true },
-    take: 2,
+    select: { potId: true, port: true },
   });
-  const potId = pickPotForReading({ mappedPotIds: mappings.map((mapping) => mapping.potId) });
-  if (potId) return potId;
+  const potId = pickPotForReading({ links, port: input.port });
+  if (potId || input.port !== undefined) return potId;
   throw new Error("potId is required for soil moisture readings: connect this device to one pot or send potId");
 }
 
@@ -191,6 +214,8 @@ export async function POST(req: Request) {
         name: true,
         status: true,
         lastSeenAt: true,
+        desiredPorts: true,
+        firmwareVersion: true,
         garden: { select: { name: true } },
       },
     });
@@ -203,8 +228,12 @@ export async function POST(req: Request) {
     }
 
     // Added but not placed in a garden yet: show it as online, store nothing.
+    const portStatus = getPortStatus(parsed.data.readings);
     if (!found.gardenId || !found.garden) {
-      await prisma.device.update({ where: { id: found.id }, data: { lastSeenAt: new Date(), status: "ONLINE" } });
+      await prisma.device.update({
+        where: { id: found.id },
+        data: { lastSeenAt: new Date(), status: "ONLINE", ...(portStatus ? { portStatus } : {}), ...(parsed.data.ports && found.desiredPorts == null ? { portCount: parsed.data.ports } : {}), ...(parsed.data.firmware && parsed.data.firmware !== found.firmwareVersion ? { firmwareVersion: parsed.data.firmware } : {}) },
+      });
       return NextResponse.json(
         { error: "This device isn't in a garden yet. Choose its garden and pot in the app.", unassigned: true },
         { status: 409 },
@@ -240,6 +269,7 @@ export async function POST(req: Request) {
     if (topLevelMoisture !== undefined || parsed.data.pump !== undefined) {
       potInputs.push({
         potId: parsed.data.potId,
+        port: parsed.data.port,
         soilMoisture: topLevelMoisture,
         pump: parsed.data.pump,
       });
@@ -251,6 +281,7 @@ export async function POST(req: Request) {
         if (moisture !== undefined || reading.pump !== undefined) {
           potInputs.push({
             potId: reading.potId,
+            port: reading.port,
             soilMoisture: moisture,
             pump: reading.pump,
           });
@@ -283,8 +314,9 @@ export async function POST(req: Request) {
       changed: boolean;
       reason: string;
     }[] = [];
+    const unconnectedPorts: number[] = [];
     for (const input of potInputs) {
-      let potId: string;
+      let potId: string | null;
       try {
         potId = await resolvePotId(input, device);
       } catch (error) {
@@ -294,6 +326,11 @@ export async function POST(req: Request) {
           { error: error instanceof Error ? error.message : "Invalid pot" },
           { status: 400 },
         );
+      }
+      if (!potId) {
+        // A port with nothing connected yet: nothing to store for it.
+        if (input.port !== undefined) unconnectedPorts.push(input.port);
+        continue;
       }
 
       // The board is the source of truth for its relay. It switches the pump
@@ -383,8 +420,19 @@ export async function POST(req: Request) {
     }
 
     const receivedAt = new Date();
+    // A port count chosen in the app wins; the board catches up on its next poll.
+    const reportedPorts = device.desiredPorts == null ? parsed.data.ports : undefined;
     await prisma.$transaction(async (tx) => {
-      await tx.reading.createMany({ data });
+      if (data.length) await tx.reading.createMany({ data });
+      if (reportedPorts) {
+        await tx.device.updateMany({ where: { id: device.id, portCount: { not: reportedPorts } }, data: { portCount: reportedPorts } });
+      }
+      if (portStatus || (parsed.data.firmware && parsed.data.firmware !== device.firmwareVersion)) {
+        await tx.device.update({
+          where: { id: device.id },
+          data: { ...(portStatus ? { portStatus } : {}), ...(parsed.data.firmware ? { firmwareVersion: parsed.data.firmware } : {}) },
+        });
+      }
       // Check the current row inside the transaction rather than trusting the
       // earlier read: an offline-monitor invocation may have transitioned it
       // while this valid telemetry request was being prepared.
@@ -420,6 +468,7 @@ export async function POST(req: Request) {
       soilReadings: data.filter((row) => row.metric === "soil_moisture").length,
       gardenReadings: gardenEntries.length,
       irrigation: irrigationDecisions,
+      ...(unconnectedPorts.length ? { unconnectedPorts } : {}),
     });
   } catch (error) {
     console.error("IoT ingest error:", error);

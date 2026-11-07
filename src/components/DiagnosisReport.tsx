@@ -21,6 +21,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { remedyPlanFor, type DiseaseKind, type HomeRemedy } from "@/lib/home-remedies";
+import { ImageLightbox } from "@/components/ImageLightbox";
+import { modelCropFor } from "@/lib/model-crops";
 
 export interface Diagnosis {
   id: string;
@@ -37,6 +39,14 @@ export interface Diagnosis {
   pot: { id: string; label: string };
   garden: { id: string; name: string };
   plant: { id: string; commonName: string };
+  /** Extra AI detail (null for scans made before it was stored). */
+  details?: {
+    alternatives?: { disease: string; className: string; confidence: number }[];
+    uncertain?: boolean;
+    restrictedTo?: string | null;
+    lookedLike?: string | null;
+    cropMatch?: number | null;
+  } | null;
 }
 
 const KIND: Record<DiseaseKind, { label: string; icon: LucideIcon; tone: string; panel: string }> = {
@@ -72,30 +82,6 @@ const KIND: Record<DiseaseKind, { label: string; icon: LucideIcon; tone: string;
   },
 };
 
-/** Crops the model was trained on (PlantVillage), with names people use for them. */
-const MODEL_CROPS: Record<string, string[]> = {
-  apple: ["apple"],
-  blueberry: ["blueberry"],
-  cherry: ["cherry"],
-  corn: ["corn", "maize", "bhutta"],
-  grape: ["grape"],
-  orange: ["orange", "lemon", "lime", "citrus", "malta", "lebu"],
-  peach: ["peach"],
-  pepper: ["pepper", "capsicum", "chili", "chilli", "morich"],
-  potato: ["potato", "alu"],
-  raspberry: ["raspberry"],
-  soybean: ["soybean", "soya"],
-  squash: ["squash", "pumpkin", "kumra", "gourd"],
-  strawberry: ["strawberry"],
-  tomato: ["tomato"],
-};
-
-/** Which model crop this plant is, if any. */
-function modelCropFor(plantName: string) {
-  const name = plantName.toLowerCase();
-  return Object.entries(MODEL_CROPS).find(([, words]) => words.some((word) => name.includes(word)))?.[0] ?? null;
-}
-
 function confidenceLabel(confidence: number) {
   if (confidence >= 0.85) return { text: "Very sure", bar: "bg-emerald-500" };
   if (confidence >= 0.6) return { text: "Fairly sure", bar: "bg-amber-500" };
@@ -106,35 +92,48 @@ export function DiagnosisReport({ report, demo = false, inPanel = false }: { rep
   const plan = remedyPlanFor(report.className ?? report.disease);
   const kind = KIND[plan.kind];
   const percent = Math.round(report.confidence * 100);
-  const sure = confidenceLabel(report.confidence);
+  const details = report.details ?? null;
+  const unsure = details?.uncertain ?? report.confidence < 0.6;
+  // The AI's own "unsure" (close runner-up, photo doesn't look like the crop) wins over the %.
+  const sure = unsure ? { text: "Not sure", bar: "bg-rose-500" } : confidenceLabel(report.confidence);
   const healthy = plan.kind === "healthy";
   const plantCrop = modelCropFor(report.plant.commonName);
-  const seenCrop = report.crop ? (modelCropFor(report.crop) ?? report.crop.toLowerCase()) : null;
+  // What the photo looked like to the model, before it was limited to the pot's crop.
+  const seenCrop = details?.lookedLike ?? (report.crop ? (modelCropFor(report.crop) ?? report.crop.toLowerCase()) : null);
+  const doesntLookLikeCrop = Boolean(
+    plantCrop && seenCrop && seenCrop !== plantCrop && (details?.cropMatch == null || details.cropMatch < 0.35),
+  );
+  const alternatives = (details?.alternatives ?? []).filter((a) => a.confidence >= 0.05);
   const hasProducts = report.treatment.organic.length > 0 || report.treatment.chemical.length > 0;
 
   return (
     <article className={inPanel ? "space-y-5" : "space-y-5 p-5"}>
       {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
+        <ImageLightbox
           src={report.imageUrl}
           alt={`Leaf diagnosed as ${report.disease}`}
-          className="h-40 w-full shrink-0 rounded-xl bg-slate-100 object-cover dark:bg-slate-800 sm:h-36 sm:w-36"
+          className="h-40 w-full sm:h-36 sm:w-36"
         />
         <div className="min-w-0 flex-1">
           <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-bold ${kind.tone}`}>
             <kind.icon size={12} />
             {kind.label}
           </span>
-          <h2 className="mt-1.5 text-2xl font-black leading-tight">{report.disease}</h2>
+          <h2 className="mt-1.5 text-2xl font-black leading-tight">
+            {unsure ? <span className="mr-1.5 align-middle text-xs font-bold uppercase tracking-wide text-rose-500">Best guess</span> : null}
+            {report.disease}
+          </h2>
           <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
             {report.plant.commonName} · {report.pot.label} · {report.garden.name}
           </p>
           <p className="text-xs text-slate-400">
             Scanned {new Date(report.createdAt).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}
-            {report.crop ? ` · looks like ${report.crop.toLowerCase()} leaf` : ""}
+            {seenCrop ? ` · looks like ${seenCrop} leaf` : ""}
           </p>
+          {details?.restrictedTo ? (
+            <p className="text-xs text-slate-400">Checked against {details.restrictedTo} diseases only ({report.pot.label} grows {report.plant.commonName})</p>
+          ) : null}
           <div className="mt-3 max-w-xs">
             <div className="flex items-center justify-between text-xs">
               <span className="font-semibold">{sure.text}</span>
@@ -156,14 +155,17 @@ export function DiagnosisReport({ report, demo = false, inPanel = false }: { rep
         <Note tone="amber" icon={Info}>
           {`The AI was trained on crop leaves (tomato, potato, pepper, corn, grape, citrus and a few more). ${report.plant.commonName} isn't one of them, so treat this result as a rough guide. The home remedies below are safe for most plants.`}
         </Note>
-      ) : seenCrop && seenCrop !== plantCrop ? (
+      ) : doesntLookLikeCrop ? (
         <Note tone="amber" icon={Info}>
-          This photo looks like a {seenCrop} leaf, but {report.pot.label} grows {report.plant.commonName}. Make sure you photographed the right plant.
+          This photo doesn&apos;t look much like a {plantCrop} leaf (it looked closer to {seenCrop}), but {report.pot.label} grows{" "}
+          {report.plant.commonName} — so the result is a guess. Make sure you photographed the right plant.
         </Note>
       ) : null}
-      {report.confidence < 0.6 ? (
+      {unsure ? (
         <Note tone="amber" icon={TriangleAlert}>
-          The AI isn&apos;t confident. Retake the photo in daylight with one leaf filling the frame, or compare the symptoms below with your plant.
+          <span className="font-semibold">The AI isn&apos;t sure.</span> For a better result, retake the photo: daylight without
+          flash · one leaf filling the frame · a plain background (hold a sheet of paper behind it) · the spots in sharp focus.
+          Or compare the symptoms below with your plant.
         </Note>
       ) : null}
 
@@ -180,6 +182,21 @@ export function DiagnosisReport({ report, demo = false, inPanel = false }: { rep
           </div>
         ) : null}
       </div>
+
+      {alternatives.length ? (
+        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+          <span className="font-semibold text-slate-500 dark:text-slate-400">Could also be:</span>
+          {alternatives.map((alt) => (
+            <span
+              key={alt.className}
+              className="inline-flex items-center gap-1 rounded-full border border-slate-200 px-2 py-0.5 font-medium dark:border-slate-700"
+            >
+              {alt.disease}
+              <span className="tabular-nums text-slate-400">{Math.round(alt.confidence * 100)}%</span>
+            </span>
+          ))}
+        </div>
+      ) : null}
 
       {/* Do this first */}
       <Section icon={ListChecks} title={healthy ? "Keep it healthy" : "Do this today"}>

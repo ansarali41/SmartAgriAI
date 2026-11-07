@@ -30,9 +30,13 @@ export async function GET(req: Request) {
   }
 
   const commands = await claimDeviceCommands(device.id);
+  const links = commands.length
+    ? await prisma.devicePotMapping.findMany({ where: { deviceId: device.id }, select: { potId: true, port: true } })
+    : [];
+  const portOf = new Map(links.map((link) => [link.potId, link.port]));
 
   // A remote action (restart, Wi-Fi reset, sleep, factory reset) queued from the app.
-  const pending = await prisma.device.findUnique({ where: { id: device.id }, select: { pendingAction: true, pendingActionAt: true } });
+  const pending = await prisma.device.findUnique({ where: { id: device.id }, select: { pendingAction: true, pendingActionAt: true, desiredPorts: true } });
   let action: string | null = null;
   if (pending?.pendingAction) {
     if (isActionLive(pending.pendingAction, pending.pendingActionAt)) action = pending.pendingAction;
@@ -42,7 +46,10 @@ export async function GET(req: Request) {
   return NextResponse.json({
     success: true,
     action,
-    commands: commands.map((command) => ({ id: command.id, deviceId: command.deviceId, potId: command.potId, command: command.command, mode: command.mode, sequence: command.sequence, expiresAt: command.expiresAt, status: "SENT" })),
+    // How many ports the board should run (set in the app); firmware 2.9+ applies it.
+    ...(pending?.desiredPorts ? { ports: pending.desiredPorts } : {}),
+    // port: which of the board's relays drives this pot (1 for single-pot boards).
+    commands: commands.map((command) => ({ id: command.id, deviceId: command.deviceId, potId: command.potId, port: portOf.get(command.potId) ?? 1, command: command.command, mode: command.mode, sequence: command.sequence, expiresAt: command.expiresAt, status: "SENT" })),
   });
 }
 

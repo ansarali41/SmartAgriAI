@@ -41,7 +41,7 @@ export function deviceStatus(status: string): DeviceStatusStyle {
 }
 
 export const DEVICE_TYPE_LABELS: Record<string, string> = {
-  esp32_node: "ESP32 sensor node",
+  esp32_node: "ESP32 device",
   soil_moisture: "Soil moisture sensor",
   dht22: "DHT22 temperature / humidity",
   dht11: "DHT11 temperature / humidity",
@@ -53,8 +53,12 @@ export const DEVICE_TYPE_LABELS: Record<string, string> = {
 };
 
 export function timeAgo(iso: string) {
-  const minutes = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
-  if (minutes < 1) return "just now";
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  if (seconds < 10) return "just now";
+  // Under a minute show seconds — "1 min ago" for a 35 s gap made a board that
+  // had just gone quiet look stale while it still counted as online.
+  if (seconds < 60) return `${Math.floor(seconds / 10) * 10} s ago`;
+  const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes} min ago`;
   const hours = Math.round(minutes / 60);
   if (hours < 24) return `${hours} h ago`;

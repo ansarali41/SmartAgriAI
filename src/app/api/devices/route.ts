@@ -23,7 +23,7 @@ export async function GET(req: Request) {
     orderBy: { createdAt: "desc" },
     include: {
       garden: { select: { name: true } },
-      potMappings: { select: { pot: { select: { id: true, label: true } } }, orderBy: { createdAt: "asc" } },
+      potMappings: { select: { port: true, pot: { select: { id: true, label: true } } }, orderBy: { port: "asc" } },
     },
     // Never expose apiKeyHash.
     omit: { apiKeyHash: true },
@@ -31,7 +31,8 @@ export async function GET(req: Request) {
   const now = new Date();
   return NextResponse.json(devices.map(({ potMappings, ...device }) => ({
     ...device,
-    pots: potMappings.map((mapping) => mapping.pot),
+    // Each connected pot with the board port it's on (1 for single-pot boards).
+    pots: potMappings.map((mapping) => ({ ...mapping.pot, port: mapping.port })),
     status: getDeviceConnectionStatus(device.lastSeenAt, now),
   })));
 }
@@ -85,7 +86,7 @@ export async function POST(req: Request) {
       }
       const occupant = await otherDeviceOnPot(potId);
       if (occupant) {
-        return NextResponse.json({ error: `This pot already has a sensor (${occupant}). Disconnect it first.` }, { status: 409 });
+        return NextResponse.json({ error: `This pot already has a device (${occupant}). Disconnect it first.` }, { status: 409 });
       }
     }
     const { plain, hash } = generateDeviceKey();
@@ -94,7 +95,7 @@ export async function POST(req: Request) {
         data: { ...deviceData, userId, apiKeyHash: hash },
         omit: { apiKeyHash: true },
       });
-      if (potId) await tx.devicePotMapping.create({ data: { deviceId: created.id, potId } });
+      if (potId) await tx.devicePotMapping.create({ data: { deviceId: created.id, potId, port: 1 } });
       return created;
     });
 

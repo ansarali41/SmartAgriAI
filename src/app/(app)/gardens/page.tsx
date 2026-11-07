@@ -221,7 +221,7 @@ export default function GardensPage() {
   async function remove(garden: Garden) {
     const ok = await confirm({
       title: `Delete “${garden.name}”?`,
-      message: `Its ${garden._count.pots} pots, ${garden._count.plants} plants, devices and all sensor history will be removed. This can't be undone.`,
+      message: `Its ${garden._count.pots} pots, ${garden._count.plants} plants, devices and all reading history will be removed. This can't be undone.`,
       confirmLabel: "Delete garden",
       tone: "danger",
     });
@@ -240,7 +240,7 @@ export default function GardensPage() {
     <div className="mx-auto max-w-7xl">
       <PageHeader
         title="Gardens"
-        subtitle="Group your pots, plants and sensors by growing area."
+        subtitle="Group your pots, plants and devices by growing area."
         action={
           gardens?.length ? (
             <button
@@ -288,7 +288,7 @@ export default function GardensPage() {
           </span>
           <h2 className="mt-4 text-lg font-black">No gardens yet</h2>
           <p className="mt-1 max-w-sm text-sm text-slate-500 dark:text-slate-400">
-            Create a garden for each growing area, then add pots, plants and sensors to it.
+            Create a garden for each growing area, then add pots, plants and devices to it.
           </p>
           <button
             type="button"

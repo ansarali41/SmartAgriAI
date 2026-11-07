@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import type { Severity } from "@prisma/client";
 import { requireUser } from "@/lib/api-auth";
 import { analyzeLeafImage, healthContributionFromPrediction, type AiPrediction } from "@/lib/ai";
+import { modelCropFor } from "@/lib/model-crops";
 import { deleteDiseaseImage, saveDiseaseImage, validateDiseaseImage } from "@/lib/disease-images";
 import { prisma } from "@/lib/db";
 import { formatDiseaseAnalysisNotification } from "@/lib/business-notifications";
@@ -43,7 +44,7 @@ export async function POST(req: Request) {
     // Derive the plant from the owned pot; never trust a client-provided plant.
     const pot = await prisma.pot.findFirst({
       where: { id: potId, gardenId, userId },
-      include: { plant: { select: { id: true, gardenId: true } } },
+      include: { plant: { select: { id: true, gardenId: true, commonName: true } } },
     });
     if (!pot) return NextResponse.json({ error: "Pot not found for selected garden" }, { status: 404 });
     if (!pot.plant) return NextResponse.json({ error: "Select a pot with an assigned plant" }, { status: 422 });
@@ -60,7 +61,8 @@ export async function POST(req: Request) {
     const filename = file instanceof File && file.name ? file.name : "leaf.jpg";
     let prediction: AiPrediction;
     try {
-      prediction = await analyzeLeafImage(file, filename);
+      // Tell the model the pot's crop (when it knows it) so it only weighs that crop's diseases.
+      prediction = await analyzeLeafImage(file, filename, modelCropFor(plant.commonName));
     } catch (error) {
       console.error("AI service call failed:", error);
       return NextResponse.json({ error: "Disease detection service is unavailable" }, { status: 502 });
@@ -102,11 +104,25 @@ export async function POST(req: Request) {
             predictedDisease: prediction.disease,
             className: prediction.className,
             confidence: prediction.confidence,
+            details: {
+              alternatives: prediction.alternatives ?? [],
+              uncertain: prediction.uncertain ?? false,
+              restrictedTo: prediction.restrictedTo ?? null,
+              lookedLike: prediction.lookedLike ?? null,
+              cropMatch: prediction.cropMatch ?? null,
+            },
           },
         });
         await tx.plant.update({
           where: { id: plant.id },
-          data: { healthStatus: prediction.className.toLowerCase().includes("healthy") ? "healthy" : "diseased" },
+          // Unsure about a disease: "at risk" rather than calling it diseased.
+          data: {
+            healthStatus: prediction.className.toLowerCase().includes("healthy")
+              ? "healthy"
+              : prediction.uncertain
+                ? "at_risk"
+                : "diseased",
+          },
         });
         await enqueueTelegramDelivery(tx, {
           userId,
@@ -129,8 +145,14 @@ export async function POST(req: Request) {
           plantId: plant.id,
           type: healthy ? "info" : "alert",
           severity: healthy ? "low" : "high",
-          title: healthy ? `${pot.label} looks healthy` : `Possible disease on ${pot.label}: ${prediction.disease}`,
-          message: `${garden.name}: ${Math.round(prediction.confidence * 100)}% confidence.${healthy ? "" : " Open the result for treatment steps."}`,
+          title: healthy
+            ? `${pot.label} looks healthy`
+            : prediction.uncertain
+              ? `${pot.label}: not sure — maybe ${prediction.disease}`
+              : `Possible disease on ${pot.label}: ${prediction.disease}`,
+          message: `${garden.name}: ${Math.round(prediction.confidence * 100)}% confidence.${
+            prediction.uncertain ? " The AI isn't sure — retake the photo for a better result." : healthy ? "" : " Open the result for treatment steps."
+          }`,
           actionUrl: "/disease-detection",
         });
         return { report, history };

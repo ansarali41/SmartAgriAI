@@ -10,7 +10,7 @@ export async function POST() {
   const { sendTelegramForUser } = await import("@/lib/telegram-settings");
   const result = await sendTelegramForUser(
     gate,
-    `✅ SmartAgri is connected. You'll get pump, sensor and disease alerts here. (${new Date().toLocaleString("en-GB", { timeZone: "Asia/Dhaka" })})`,
+    `✅ SmartAgri is connected. You'll get pump, device and disease alerts here. (${new Date().toLocaleString("en-GB", { timeZone: "Asia/Dhaka" })})`,
   );
 
   if (!result.ok) {

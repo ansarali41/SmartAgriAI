@@ -3,8 +3,8 @@ import json
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from PIL import Image
+from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
+from PIL import Image, ImageOps
 
 from .treatments import crop_name, severity_for, symptoms_for, treatment_for
 
@@ -138,17 +138,64 @@ def ensure_ready():
         print("Warning: Model artifacts not found. Using fail-safe mock fallback for predictions.")
 
 
+# ---------------------------------------------------------------------------
+# Preprocessing + test-time augmentation
+# ---------------------------------------------------------------------------
+# PlantVillage photos are square, one leaf centred. Real phone photos are
+# rotated (EXIF), oblong and framed loosely, so instead of squashing one image
+# we look at several views of it and average what the model says.
+
+
+def _views(image_bytes: bytes) -> list:
+    image = Image.open(io.BytesIO(image_bytes))
+    image = ImageOps.exif_transpose(image).convert("RGB")  # phone photos: apply rotation
+    size = (IMAGE_SIZE, IMAGE_SIZE)
+    w, h = image.size
+    side = min(w, h)
+    # A closer crop around the centre (the leaf is usually in the middle).
+    zoom = int(side * 0.8)
+    left, top = (w - zoom) // 2, (h - zoom) // 2
+    base = [
+        ImageOps.pad(image, size, color=(128, 128, 128)),  # whole photo, no stretching
+        ImageOps.fit(image, size),  # centre square
+        image.crop((left, top, left + zoom, top + zoom)).resize(size),  # closer
+    ]
+    return base + [ImageOps.mirror(view) for view in base]
+
+
 def preprocess_image(image_bytes: bytes):
     import numpy as np
     import tensorflow as tf
-    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    image = image.resize((IMAGE_SIZE, IMAGE_SIZE))
-    array = tf.keras.utils.img_to_array(image)
+
+    arrays = [tf.keras.utils.img_to_array(view) for view in _views(image_bytes)]
+    batch = np.stack(arrays, axis=0)
     if USE_EFFICIENTNET_PREPROCESS:
         from tensorflow.keras.applications.efficientnet import preprocess_input
 
-        array = preprocess_input(array)
-    return np.expand_dims(array, axis=0)
+        batch = preprocess_input(batch)
+    return batch
+
+
+def crop_key(label: str) -> str:
+    """'Corn_(maize)___Common_rust_' -> 'corn', 'Pepper,_bell___healthy' -> 'pepper'."""
+    head = label.split("___")[0].lower()
+    for sep in ("_(", ",", "("):
+        head = head.split(sep)[0]
+    return head.strip("_ ")
+
+
+def pretty(label: str) -> str:
+    name = label.split("___")[-1].replace("_", " ").strip()
+    crop = crop_name(label).split(" (")[0].split(",")[0]
+    return f"Healthy {crop.lower()}" if name.lower() == "healthy" else name.title()
+
+
+# Below this the answer is a guess: say so and suggest a better photo.
+UNSURE_BELOW = float(os.getenv("UNSURE_BELOW", "0.55"))
+UNSURE_MARGIN = float(os.getenv("UNSURE_MARGIN", "0.15"))
+# With a known crop: if less than this share of the model's belief was on that
+# crop, the photo doesn't look like it — flag the answer as unsure.
+CROP_MATCH_MIN = float(os.getenv("CROP_MATCH_MIN", "0.35"))
 
 
 @app.get("/health")
@@ -162,8 +209,21 @@ def health():
     }
 
 
+# Optional shared secret: when AI_SERVICE_TOKEN is set (public hosting),
+# /predict requires a matching "x-ai-token" header. /health stays open.
+AI_SERVICE_TOKEN = os.getenv("AI_SERVICE_TOKEN", "")
+
+
 @app.post("/predict")
-async def predict(file: UploadFile = File(...)):
+async def predict(
+    file: UploadFile = File(...),
+    # The pot's crop when the app knows it (e.g. "tomato"): only that crop's
+    # diseases are considered, so a tomato is never called a peach.
+    crop: str | None = Form(default=None),
+    x_ai_token: str | None = Header(default=None),
+):
+    if AI_SERVICE_TOKEN and x_ai_token != AI_SERVICE_TOKEN:
+        raise HTTPException(status_code=401, detail="Missing or invalid AI service token.")
     ensure_ready()
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Upload must be an image file.")
@@ -193,13 +253,36 @@ async def predict(file: UploadFile = File(...)):
 
     try:
         batch = preprocess_image(image_bytes)
-        predictions = model.predict(batch, verbose=0)[0]
+        raw = model.predict(batch, verbose=0)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Could not process image: {exc}") from exc
 
     import numpy as np
-    class_index = int(np.argmax(predictions))
-    confidence = float(predictions[class_index])
+
+    probs = np.asarray(raw, dtype="float64").mean(axis=0)  # average of the views
+    probs = probs / probs.sum()
+    looked_like = crop_key(labels[int(np.argmax(probs))])
+
+    # Only this crop's classes, when the crop is one the model knows.
+    wanted = (crop or "").strip().lower()
+    allowed = [i for i, name in enumerate(labels) if crop_key(name) == wanted] if wanted else []
+    # A crop with a single class (orange: only citrus greening; blueberry: only
+    # healthy…) can't be limited to — it would always give that one answer.
+    if len(allowed) < 2:
+        allowed = []
+    # How much of the model's belief was on this crop at all: low = the photo
+    # doesn't look like this plant (wrong plant, background, blurry).
+    crop_match = float(probs[allowed].sum()) if allowed else None
+    if allowed:
+        mask = np.zeros_like(probs)
+        mask[allowed] = 1.0
+        probs = probs * mask
+        probs = probs / probs.sum() if probs.sum() > 0 else mask / mask.sum()
+
+    order = [int(i) for i in np.argsort(probs)[::-1] if probs[i] > 0]
+    class_index = order[0]
+    confidence = float(probs[class_index])
+    runner_up = float(probs[order[1]]) if len(order) > 1 else 0.0
     label = labels[class_index]
     treatment = treatment_for(label)
     recommendation = " ".join(treatment["immediate"] + treatment["prevention"])
@@ -214,4 +297,17 @@ async def predict(file: UploadFile = File(...)):
         "treatment": treatment,
         "recommendation": recommendation,
         "modelVersion": MODEL_PATH.name,
+        # Extra detail for the report.
+        "alternatives": [
+            {"disease": pretty(labels[i]), "className": labels[i], "confidence": round(float(probs[i]), 4)}
+            for i in order[1:4]
+            if probs[i] >= 0.05
+        ],
+        "uncertain": confidence < UNSURE_BELOW
+        or (confidence - runner_up) < UNSURE_MARGIN
+        or (crop_match is not None and crop_match < CROP_MATCH_MIN),
+        "cropMatch": round(crop_match, 4) if crop_match is not None else None,
+        "restrictedTo": wanted if allowed else None,
+        "lookedLike": looked_like,
+        "views": int(len(raw)),
     }

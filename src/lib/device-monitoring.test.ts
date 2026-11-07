@@ -9,7 +9,7 @@ const lastSeenAt = new Date("2026-10-28T05:40:00.000Z");
 
 test("offline threshold is explicit and defaults to the connection-status fallback", () => {
   assert.equal(getDeviceOfflineThresholdMs({ DEVICE_OFFLINE_THRESHOLD_SECONDS: "120" }), 120_000);
-  assert.equal(getDeviceOfflineThresholdMs({ DEVICE_OFFLINE_THRESHOLD_SECONDS: "invalid" }), 120_000);
+  assert.equal(getDeviceOfflineThresholdMs({ DEVICE_OFFLINE_THRESHOLD_SECONDS: "invalid" }), 90_000);
 });
 
 test("concurrent monitors create one offline transition and one durable event", async () => {

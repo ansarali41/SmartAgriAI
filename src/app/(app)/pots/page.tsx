@@ -44,7 +44,7 @@ const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
   { value: "dry", label: "Needs water" },
   { value: "ok", label: "Just right" },
   { value: "wet", label: "Very wet" },
-  { value: "no-sensor", label: "No sensor" },
+  { value: "no-sensor", label: "No device" },
   { value: "pump-on", label: "Pump running" },
 ];
 const PAGE_SIZE = 12;
@@ -52,7 +52,7 @@ const PAGE_SIZE = 12;
 const LIVE_MS = 60_000;
 
 function potState(pot: Pot, now: number) {
-  if (pot.sensors.length === 0) return { key: "no-sensor" as const, value: null, text: "No sensor", tone: "text-slate-400", bar: "bg-slate-300" };
+  if (pot.sensors.length === 0) return { key: "no-sensor" as const, value: null, text: "No device", tone: "text-slate-400", bar: "bg-slate-300" };
   const live = pot.moistureRecordedAt && now - new Date(pot.moistureRecordedAt).getTime() <= LIVE_MS ? pot.currentMoisture : null;
   if (live == null) return { key: "fault" as const, value: null, text: "Probe not reading", tone: "text-rose-600 dark:text-rose-400", bar: "bg-slate-300" };
   if (live < pot.moistureOnThreshold) return { key: "dry" as const, value: live, text: "Needs water", tone: "text-amber-600 dark:text-amber-400", bar: "bg-amber-500" };
@@ -63,7 +63,7 @@ function potState(pot: Pot, now: number) {
 export default function PotsPage() {
   const { confirm, toast } = useFeedback();
   const { data: gardens } = useSWR<Garden[]>("/api/gardens");
-  const { data: pots, mutate } = useSWR<Pot[]>("/api/pots", { refreshInterval: 5000 });
+  const { data: pots, mutate } = useSWR<Pot[]>("/api/pots", { refreshInterval: 3000 });
   const now = useNow();
   const [query, setQuery] = useState("");
   const [gardenFilter, setGardenFilter] = useState("all");
@@ -124,14 +124,14 @@ export default function PotsPage() {
     <div className="mx-auto max-w-7xl">
       <PageHeader
         title="Pots"
-        subtitle="Every pot across your gardens — its plant, soil moisture and sensor."
+        subtitle="Every pot across your gardens — its plant, soil moisture and device."
         action={<PlantingLauncher gardens={gardens ?? []} gardenId={gardenFilter} onCreated={() => mutate()} />}
       />
 
       <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Tile icon={Package} label="Pots" value={counts.total} active={statusFilter === "all"} onClick={() => toggle("all")} />
         <Tile icon={CircleAlert} label="Need water" value={counts.dry} tone={counts.dry ? "amber" : undefined} active={statusFilter === "dry"} onClick={() => toggle("dry")} />
-        <Tile icon={Cpu} label="Without a sensor" value={counts.noSensor} active={statusFilter === "no-sensor"} onClick={() => toggle("no-sensor")} />
+        <Tile icon={Cpu} label="Without a device" value={counts.noSensor} active={statusFilter === "no-sensor"} onClick={() => toggle("no-sensor")} />
         <Tile icon={Droplets} label="Pumps running" value={counts.pumpsOn} tone={counts.pumpsOn ? "sky" : undefined} active={statusFilter === "pump-on"} onClick={() => toggle("pump-on")} />
       </div>
 
@@ -276,7 +276,7 @@ function PotCard({ pot, now, onEdit, onDelete }: { pot: Pot; now: number; onEdit
       <footer className="mt-4 flex flex-wrap items-center gap-2 border-t border-slate-100 px-4 py-2.5 text-[11px] dark:border-slate-800">
         <span className="flex min-w-0 items-center gap-1.5 font-semibold text-slate-600 dark:text-slate-300">
           <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${sensor ? deviceStatus(sensor.status).dot : "bg-slate-300 dark:bg-slate-600"}`} />
-          <span className="truncate">{sensor ? sensor.name : "No sensor"}</span>
+          <span className="truncate">{sensor ? sensor.name : "No device"}</span>
         </span>
         <span
           className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-semibold ${

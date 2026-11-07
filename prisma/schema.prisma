@@ -6,8 +6,11 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  // App queries. On Supabase: the pooled connection (port 6543, ?pgbouncer=true).
+  url       = env("DATABASE_URL")
+  // Migrations. On Supabase: the direct connection (port 5432). Locally: same as DATABASE_URL.
+  directUrl = env("DIRECT_URL")
 }
 
 // ---------------------------------------------------------------------------
@@ -188,22 +191,22 @@ model User {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  gardens          Garden[]
-  pots             Pot[]
-  plants           Plant[]
-  devices          Device[]
-  readings         Reading[]
-  diseaseReports   DiseaseReport[]
+  gardens            Garden[]
+  pots               Pot[]
+  plants             Plant[]
+  devices            Device[]
+  readings           Reading[]
+  diseaseReports     DiseaseReport[]
   diseasePredictions DiseasePrediction[]
-  irrigationEvents IrrigationEvent[]
-  irrigationConfig IrrigationConfig?
-  schedules        Schedule[]
-  notifications    Notification[]
-  deviceCommands   DeviceCommand[]
-  pumpEvents       PumpEvent[]
+  irrigationEvents   IrrigationEvent[]
+  irrigationConfig   IrrigationConfig?
+  schedules          Schedule[]
+  notifications      Notification[]
+  deviceCommands     DeviceCommand[]
+  pumpEvents         PumpEvent[]
   telegramDeliveries TelegramDelivery[]
-  telegramSettings TelegramSettings?
-  alertResolutions AlertResolution[]
+  telegramSettings   TelegramSettings?
+  alertResolutions   AlertResolution[]
 }
 
 model Garden {
@@ -219,17 +222,17 @@ model Garden {
   createdAt DateTime       @default(now())
   updatedAt DateTime       @updatedAt
 
-  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  pots             Pot[]
-  plants           Plant[]
-  devices          Device[]
-  readings         Reading[]
-  irrigationEvents IrrigationEvent[]
-  deviceCommands   DeviceCommand[]
-  weatherSnapshots WeatherSnapshot[]
-  pumpEvents       PumpEvent[]
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pots               Pot[]
+  plants             Plant[]
+  devices            Device[]
+  readings           Reading[]
+  irrigationEvents   IrrigationEvent[]
+  deviceCommands     DeviceCommand[]
+  weatherSnapshots   WeatherSnapshot[]
+  pumpEvents         PumpEvent[]
   diseasePredictions DiseasePrediction[]
-  alertResolutions AlertResolution[]
+  alertResolutions   AlertResolution[]
 
   @@unique([userId, name])
   @@index([userId, status])
@@ -240,19 +243,19 @@ model Garden {
 // a random secret (stored hashed); the user proves physical access with the
 // short pairing code the board prints. See lib/device-pairing.
 model DevicePairing {
-  id              String    @id @default(cuid())
-  hardwareId      String    @unique
-  secretHash      String
-  pairingCode     String
-  firmware        String?
-  failedAttempts  Int       @default(0)
-  lastSeenAt      DateTime  @default(now())
-  claimedAt       DateTime?
-  claimedByUserId String?
-  deviceId        String?
+  id                 String    @id @default(cuid())
+  hardwareId         String    @unique
+  secretHash         String
+  pairingCode        String
+  firmware           String?
+  failedAttempts     Int       @default(0)
+  lastSeenAt         DateTime  @default(now())
+  claimedAt          DateTime?
+  claimedByUserId    String?
+  deviceId           String?
   // Plaintext key held only until the board collects it (then cleared).
-  pendingKey      String?
-  keyExpiresAt    DateTime?
+  pendingKey         String?
+  keyExpiresAt       DateTime?
   // Button claim: the app asked the user to press BOOT on the board. The
   // board confirms within the window and the claim is completed with these.
   confirmRequestedAt DateTime?
@@ -260,7 +263,7 @@ model DevicePairing {
   requestGardenId    String?
   requestPotId       String?
   requestName        String?
-  createdAt       DateTime  @default(now())
+  createdAt          DateTime  @default(now())
 
   @@index([claimedAt, lastSeenAt])
 }
@@ -283,34 +286,34 @@ model AlertResolution {
 }
 
 model Pot {
-  id        String         @id @default(cuid())
-  userId    String
-  gardenId  String
+  id                       String            @id @default(cuid())
+  userId                   String
+  gardenId                 String
   /// Serial number per user (POT-1, POT-2, …), assigned by the server on create.
-  number    Int
-  label     String
-  sizeCm    Float?
-  soilType  SoilType       @default(loam)
-  position  String?
-  status    ResourceStatus @default(active)
-  irrigationMode      PotIrrigationMode @default(AUTO)
-  moistureOnThreshold  Float             @default(30)
-  moistureOffThreshold Float             @default(50)
-  pumpState            IrrigationStatus  @default(off)
-  commandSequence      Int               @default(0)
-  confirmedCommandSequence Int            @default(0)
-  createdAt DateTime       @default(now())
-  updatedAt DateTime       @updatedAt
+  number                   Int
+  label                    String
+  sizeCm                   Float?
+  soilType                 SoilType          @default(loam)
+  position                 String?
+  status                   ResourceStatus    @default(active)
+  irrigationMode           PotIrrigationMode @default(AUTO)
+  moistureOnThreshold      Float             @default(30)
+  moistureOffThreshold     Float             @default(50)
+  pumpState                IrrigationStatus  @default(off)
+  commandSequence          Int               @default(0)
+  confirmedCommandSequence Int               @default(0)
+  createdAt                DateTime          @default(now())
+  updatedAt                DateTime          @updatedAt
 
-  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  garden           Garden            @relation(fields: [gardenId], references: [id], onDelete: Cascade)
-  plant            Plant?
-  readings         Reading[]
-  irrigationEvents IrrigationEvent[]
-  deviceCommands   DeviceCommand[]
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  garden             Garden              @relation(fields: [gardenId], references: [id], onDelete: Cascade)
+  plant              Plant?
+  readings           Reading[]
+  irrigationEvents   IrrigationEvent[]
+  deviceCommands     DeviceCommand[]
   diseasePredictions DiseasePrediction[]
-  deviceMappings   DevicePotMapping[]
-  pumpEvents       PumpEvent[]
+  deviceMappings     DevicePotMapping[]
+  pumpEvents         PumpEvent[]
 
   @@unique([gardenId, label])
   @@unique([userId, number])
@@ -318,90 +321,99 @@ model Pot {
 }
 
 model Plant {
-  id           String       @id @default(cuid())
-  userId       String
-  gardenId     String
-  potId        String       @unique
-  commonName   String
-  scientificName String?
-  variety      String?
-  plantedAt    DateTime?
-  growthStage  GrowthStage  @default(seedling)
-  healthStatus HealthStatus @default(unknown)
+  id                String       @id @default(cuid())
+  userId            String
+  gardenId          String
+  potId             String       @unique
+  commonName        String
+  scientificName    String?
+  variety           String?
+  plantedAt         DateTime?
+  growthStage       GrowthStage  @default(seedling)
+  healthStatus      HealthStatus @default(unknown)
   expectedHarvestAt DateTime?
-  imageUrls    String[]     @default([])
-  notes        String?
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
+  imageUrls         String[]     @default([])
+  notes             String?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
 
-  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  garden         Garden          @relation(fields: [gardenId], references: [id], onDelete: Cascade)
-  pot            Pot             @relation(fields: [potId], references: [id], onDelete: Cascade)
-  threshold      PlantThreshold?
-  diseaseReports DiseaseReport[]
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  garden             Garden              @relation(fields: [gardenId], references: [id], onDelete: Cascade)
+  pot                Pot                 @relation(fields: [potId], references: [id], onDelete: Cascade)
+  threshold          PlantThreshold?
+  diseaseReports     DiseaseReport[]
   diseasePredictions DiseasePrediction[]
-  tasks          Task[]
+  tasks              Task[]
 
   @@index([userId, gardenId, healthStatus])
   @@index([userId, gardenId, potId])
 }
 
 model Device {
-  id              String         @id @default(cuid())
+  id              String        @id @default(cuid())
   userId          String
   // Optional: a board can be added first and placed in a garden later.
   gardenId        String?
-  hardwareId      String         @unique
+  hardwareId      String        @unique
   name            String
-  type            DeviceType     @default(esp32_node)
+  type            DeviceType    @default(esp32_node)
   apiKeyHash      String // hashed device key for ingestion auth
   pin             String?
   model           String?
   firmwareVersion String?
-  status          DeviceStatus   @default(NEVER_SEEN)
+  status          DeviceStatus  @default(NEVER_SEEN)
   lastSeenAt      DateTime?
   /// A remote action waiting for the board (restart, Wi-Fi reset, sleep,
   /// factory reset). The board picks it up on its next poll and confirms.
   pendingAction   DeviceAction?
   pendingActionAt DateTime?
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
+  /// How many pots this board can serve (soil probe + pump per port), as
+  /// reported by its firmware. 1 for a classic single-pot board.
+  portCount       Int           @default(1)
+  /// Port count chosen in the app (null = whatever the board reports). Sent to
+  /// the board on its command poll; firmware 2.9+ applies it without re-flashing.
+  desiredPorts    Int?
+  /// What each port reported last: [{ port, moisture (null = probe not reading), pump }].
+  /// Kept even for ports with no pot, so the Devices page shows what's wired.
+  portStatus      Json?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
-  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  garden   Garden?   @relation(fields: [gardenId], references: [id], onDelete: Cascade)
-  readings Reading[]
-  commands DeviceCommand[]
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  garden      Garden?            @relation(fields: [gardenId], references: [id], onDelete: Cascade)
+  readings    Reading[]
+  commands    DeviceCommand[]
   potMappings DevicePotMapping[]
-  pumpEvents PumpEvent[]
+  pumpEvents  PumpEvent[]
 
   @@index([userId, gardenId, status])
 }
 
 model DeviceCommand {
-  id             String              @id @default(cuid())
-  userId         String
-  gardenId       String
-  deviceId       String
-  potId          String
-  command        DeviceCommandType
-  status         DeviceCommandStatus @default(PENDING)
-  mode           PotIrrigationMode
-  error          String?
-  createdAt      DateTime            @default(now())
-  sentAt         DateTime?
-  processedAt    DateTime?
-  acknowledgedAt DateTime?
+  id                     String              @id @default(cuid())
+  userId                 String
+  gardenId               String
+  deviceId               String
+  potId                  String
+  command                DeviceCommandType
+  status                 DeviceCommandStatus @default(PENDING)
+  mode                   PotIrrigationMode
+  error                  String?
+  createdAt              DateTime            @default(now())
+  sentAt                 DateTime?
+  processedAt            DateTime?
+  acknowledgedAt         DateTime?
   deliveryAcknowledgedAt DateTime?
-  executionResultAt DateTime?
-  attemptCount   Int                 @default(0)
-  lastAttemptAt  DateTime?
-  nextAttemptAt  DateTime            @default(now())
-  expiresAt      DateTime
-  sequence       Int                 @default(0)
-  decisionMoisture Float?
-  onThreshold      Float?
-  offThreshold     Float?
-  pumpEvents     PumpEvent[]
+  executionResultAt      DateTime?
+  attemptCount           Int                 @default(0)
+  lastAttemptAt          DateTime?
+  nextAttemptAt          DateTime            @default(now())
+  expiresAt              DateTime
+  sequence               Int                 @default(0)
+  decisionMoisture       Float?
+  onThreshold            Float?
+  offThreshold           Float?
+  pumpEvents             PumpEvent[]
 
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   garden Garden @relation(fields: [gardenId], references: [id], onDelete: Cascade)
@@ -416,6 +428,8 @@ model DevicePotMapping {
   id            String   @id @default(cuid())
   deviceId      String
   potId         String
+  /// Which of the board's ports (1–6) measures and waters this pot.
+  port          Int      @default(1)
   sensorChannel String?
   createdAt     DateTime @default(now())
 
@@ -423,6 +437,7 @@ model DevicePotMapping {
   pot    Pot    @relation(fields: [potId], references: [id], onDelete: Cascade)
 
   @@unique([deviceId, potId])
+  @@unique([deviceId, port])
   @@unique([deviceId, sensorChannel])
   @@index([potId])
 }
@@ -534,6 +549,9 @@ model DiseasePrediction {
   predictedDisease String
   className        String?
   confidence       Float
+  /// Extra AI detail: alternatives, unsure flag, crop the answer was limited to,
+  /// what the photo looked like. Shown when the scan is reopened.
+  details          Json?
   createdAt        DateTime @default(now())
 
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -574,12 +592,12 @@ model IrrigationEvent {
 
 // Replaces the embedded user.irrigation object from the legacy model.
 model IrrigationConfig {
-  id              String           @id @default(cuid())
-  userId          String           @unique
-  thresholdPercent Float           @default(30)
-  manualOverride  Boolean          @default(false)
-  currentStatus   IrrigationStatus @default(off)
-  updatedAt       DateTime         @updatedAt
+  id               String           @id @default(cuid())
+  userId           String           @unique
+  thresholdPercent Float            @default(30)
+  manualOverride   Boolean          @default(false)
+  currentStatus    IrrigationStatus @default(off)
+  updatedAt        DateTime         @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
@@ -650,7 +668,7 @@ model TelegramDelivery {
   // A non-secret configuration label only. The configured chat ID is never persisted.
   destinationRef    String                    @default("configured-default")
   messageText       String
-  status            TelegramDeliveryStatus   @default(PENDING)
+  status            TelegramDeliveryStatus    @default(PENDING)
   attemptCount      Int                       @default(0)
   nextAttemptAt     DateTime                  @default(now())
   lastErrorCode     String?
@@ -669,13 +687,13 @@ model TelegramDelivery {
 }
 
 model Task {
-  id      String     @id @default(cuid())
-  plantId String
-  type    TaskType
-  dueAt   DateTime?
-  status  TaskStatus @default(pending)
-  notes   String?
-  createdAt DateTime @default(now())
+  id        String     @id @default(cuid())
+  plantId   String
+  type      TaskType
+  dueAt     DateTime?
+  status    TaskStatus @default(pending)
+  notes     String?
+  createdAt DateTime   @default(now())
 
   plant Plant @relation(fields: [plantId], references: [id], onDelete: Cascade)
 

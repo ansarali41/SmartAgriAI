@@ -46,8 +46,28 @@ interface HistoryPage {
 }
 type AiStatus = { status: "ready" | "mock" | "offline"; labels?: number };
 
-const MAX_BYTES = 10 * 1024 * 1024;
+// Phone photos can be large; they're shrunk in the browser before upload
+// (the model only looks at 224×224, and Vercel caps request bodies at 4.5 MB).
+const MAX_BYTES = 30 * 1024 * 1024;
 const ACCEPTED = ["image/jpeg", "image/png", "image/webp"];
+const MAX_SIDE = 1600;
+
+/** Downscale to MAX_SIDE and re-encode as JPEG. Falls back to the original. */
+async function shrinkPhoto(file: File): Promise<File> {
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+    if (scale === 1 && file.size < 1.5 * 1024 * 1024) return file;
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    canvas.getContext("2d")?.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
+    return blob ? new File([blob], file.name.replace(/\.[^.]+$/, "") + ".jpg", { type: "image/jpeg" }) : file;
+  } catch {
+    return file;
+  }
+}
 
 export default function DiseaseDetectionPage() {
   const { toast } = useFeedback();
@@ -84,7 +104,7 @@ export default function DiseaseDetectionPage() {
       return;
     }
     if (next.size > MAX_BYTES) {
-      toast.error("That photo is over 10 MB — try a smaller one.");
+      toast.error("That photo is over 30 MB — try a smaller one.");
       return;
     }
     if (preview) URL.revokeObjectURL(preview);
@@ -105,7 +125,7 @@ export default function DiseaseDetectionPage() {
     setError("");
     try {
       const form = new FormData();
-      form.append("file", file);
+      form.append("file", await shrinkPhoto(file));
       form.append("gardenId", pot.gardenId);
       form.append("potId", pot.id);
       // The server derives and verifies this again from potId.
@@ -200,7 +220,7 @@ export default function DiseaseDetectionPage() {
                     <ImagePlus size={20} />
                   </span>
                   <span className="text-sm font-bold">Take or upload a photo</span>
-                  <span className="text-xs text-slate-500 dark:text-slate-400">Drag it here · JPG, PNG or WebP · up to 10 MB</span>
+                  <span className="text-xs text-slate-500 dark:text-slate-400">Drag it here · JPG, PNG or WebP</span>
                   <input type="file" accept={ACCEPTED.join(",")} className="sr-only" onChange={(e) => pick(e.target.files?.[0])} />
                 </label>
               )}

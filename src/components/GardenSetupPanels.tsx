@@ -10,6 +10,7 @@ import { DatePicker } from "@/components/DatePicker";
 import { SlideOver } from "@/components/SlideOver";
 import { DEVICE_TYPE_LABELS } from "@/components/device-ui";
 import { apiPatch, apiPost } from "@/lib/api-client";
+import { supportsRemotePorts } from "@/lib/device-pot";
 import {
   PLANT_CATALOG,
   SOIL_LABELS,
@@ -77,8 +78,13 @@ interface UserDevice {
   status: string;
   gardenId: string | null;
   garden: { name: string } | null;
-  pots: { id: string; label: string }[];
+  pots: { id: string; label: string; port: number }[];
+  portCount: number;
+  firmwareVersion?: string | null;
+  portStatus?: { port: number; moisture: number | null; pump: boolean | null }[] | null;
 }
+
+const MAX_PORTS = 6;
 
 const STATUS_DOT: Record<string, string> = {
   ONLINE: "bg-emerald-500",
@@ -117,7 +123,7 @@ export function AddPlantingPanel({
       description={
         newDevice
           ? "Copy the device key now — for security it is shown only once."
-          : `Every pot in ${gardenName} needs a plant. A sensor is optional.`
+          : `Every pot in ${gardenName} needs a plant. A device is optional.`
       }
       footer={
         newDevice ? (
@@ -171,19 +177,41 @@ function PlantingFields({
   const nextNumber = allPots ? Math.max(0, ...allPots.map((pot) => pot.number)) + 1 : null;
   const labelTaken = existingPotLabels.some((label) => label.toLowerCase() === form.label.trim().toLowerCase());
   const [deviceChoice, setDeviceChoice] = useState<DeviceChoice>("none");
-  const [pickedDeviceId, setPickedDeviceId] = useState("");
+  // The board and port that will water this pot.
+  const [picked, setPicked] = useState<{ deviceId: string; port: number } | null>(null);
   const [newDevice, setNewDevice] = useState({ name: "", hardwareId: "", type: "esp32_node" });
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const { data: plants } = useSWR<{ commonName: string; gardenId: string }[]>("/api/plants");
   const { data: allDevices } = useSWR<UserDevice[]>("/api/devices", { refreshInterval: 5000 });
 
-  // One sensor per pot: a board already watching a pot isn't available.
-  // This garden's boards first, then ones not in a garden, then other gardens'.
+  // A board is available while it has a free port (one pot per port) — or can
+  // get a new one (firmware 2.9+, up to 6). A board already serving pots in
+  // another garden can't move here without them. This garden's boards first,
+  // then ones not in a garden, then other gardens'.
   const rank = (device: UserDevice) => (device.gardenId === gardenId ? 0 : device.gardenId === null ? 1 : 2);
-  const freeDevices = (allDevices ?? []).filter((device) => device.pots.length === 0).sort((a, b) => rank(a) - rank(b));
+  const slotsOf = (device: UserDevice) => {
+    const used = new Set(device.pots.map((p) => p.port));
+    const free = Array.from({ length: device.portCount }, (_, i) => i + 1).filter((n) => !used.has(n));
+    const newPort = supportsRemotePorts(device.firmwareVersion) && device.portCount < MAX_PORTS ? device.portCount + 1 : null;
+    return { free, newPort };
+  };
+  const usable = (device: UserDevice) => {
+    const { free, newPort } = slotsOf(device);
+    return (free.length > 0 || newPort !== null) && (device.pots.length === 0 || device.gardenId === gardenId);
+  };
+  const freeDevices = (allDevices ?? []).filter(usable).sort((a, b) => rank(a) - rank(b));
   const busyCount = (allDevices ?? []).length - freeDevices.length;
-  const existingDeviceId = freeDevices.some((device) => device.id === pickedDeviceId) ? pickedDeviceId : (freeDevices[0]?.id ?? "");
+  // Keep the user's pick while it's still possible; otherwise the first free (or new) port.
+  const pickStillValid =
+    picked &&
+    freeDevices.some((d) => {
+      if (d.id !== picked.deviceId) return false;
+      const { free, newPort } = slotsOf(d);
+      return free.includes(picked.port) || newPort === picked.port;
+    });
+  const firstChoice = freeDevices[0] ? { deviceId: freeDevices[0].id, port: slotsOf(freeDevices[0]).free[0] ?? slotsOf(freeDevices[0]).newPort! } : null;
+  const selected = pickStillValid ? picked! : firstChoice;
 
   const profile = findPlantProfile(form.plantName);
   const name = form.plantName.trim();
@@ -231,8 +259,8 @@ function PlantingFields({
     setSaving(true);
     try {
       const device =
-        deviceChoice === "existing" && existingDeviceId
-          ? { mode: "existing", deviceId: existingDeviceId }
+        deviceChoice === "existing" && selected
+          ? { mode: "existing", deviceId: selected.deviceId, port: selected.port }
           : deviceChoice === "new"
             ? { mode: "new", name: newDevice.name.trim(), hardwareId: newDevice.hardwareId.trim(), type: newDevice.type }
             : undefined;
@@ -409,61 +437,105 @@ function PlantingFields({
 
       {/* 3. Device (optional) */}
       <section className="space-y-3 border-t border-slate-100 pt-5 dark:border-slate-800" aria-label="Device">
-        <StepHeading step={3} icon={Cpu} title="Sensor device" optional />
+        <StepHeading step={3} icon={Cpu} title="Device" optional />
         <p className="-mt-1 text-xs text-slate-500 dark:text-slate-400">
-          A connected sensor keeps this pot&apos;s soil moisture up to date and drives automatic watering.
+          A connected device keeps this pot&apos;s soil moisture up to date and drives automatic watering.
         </p>
-        <div role="radiogroup" aria-label="Sensor device" className="grid gap-2">
-          <ChoiceCard checked={deviceChoice === "none"} onSelect={() => setDeviceChoice("none")} title="Skip for now" hint="Connect a sensor later from the pot card." />
+        <div role="radiogroup" aria-label="Device" className="grid gap-2">
+          <ChoiceCard checked={deviceChoice === "none"} onSelect={() => setDeviceChoice("none")} title="Skip for now" hint="Connect a device later from the pot card." />
           <ChoiceCard
             checked={deviceChoice === "existing"}
             onSelect={() => setDeviceChoice("existing")}
             disabled={freeDevices.length === 0}
-            title="Use an available device"
+            title="Use a port on one of your devices"
             hint={
               !allDevices
                 ? "Looking for your devices…"
                 : freeDevices.length
-                  ? `${freeDevices.length} free ${freeDevices.length === 1 ? "device" : "devices"} — not connected to any pot`
+                  ? "Each port = one soil probe + one pump. Pick a free port, or add a new one."
                   : busyCount
-                    ? "All your devices are on pots — disconnect one first"
+                    ? "Every device's ports are in use (6 max, or update older boards to firmware 2.9)"
                     : "You haven't added a device yet"
             }
           />
           {deviceChoice === "existing" && freeDevices.length ? (
-            <div role="radiogroup" aria-label="Available devices" className="max-h-60 space-y-1.5 overflow-y-auto rounded-xl border border-slate-200 p-1.5 dark:border-slate-800">
+            <div aria-label="Available ports" className="max-h-80 space-y-2 overflow-y-auto rounded-xl border border-slate-200 p-2 dark:border-slate-800">
               {freeDevices.map((device) => {
-                const checked = device.id === existingDeviceId;
+                const { newPort } = slotsOf(device);
                 const where =
                   device.gardenId === gardenId
                     ? "In this garden"
                     : device.garden
-                      ? `In ${device.garden.name} · will move to this garden`
-                      : "Not in a garden yet · will be added here";
+                      ? `In ${device.garden.name} · moves here`
+                      : "Not in a garden yet · added here";
+                const live = device.status === "ONLINE" || device.status === "STALE";
+                const reading = new Map((live ? (device.portStatus ?? []) : []).map((p) => [p.port, p.moisture]));
+                const slots = [...Array.from({ length: device.portCount }, (_, i) => i + 1), ...(newPort ? [newPort] : [])];
                 return (
-                  <button
-                    key={device.id}
-                    type="button"
-                    role="radio"
-                    aria-checked={checked}
-                    onClick={() => setPickedDeviceId(device.id)}
-                    className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition ${
-                      checked ? "bg-emerald-50 ring-1 ring-emerald-500/60 dark:bg-emerald-500/10" : "hover:bg-slate-50 dark:hover:bg-slate-800/60"
-                    }`}
-                  >
-                    <Cpu size={16} className={checked ? "shrink-0 text-emerald-600 dark:text-emerald-400" : "shrink-0 text-slate-400"} />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-semibold">{device.name}</span>
-                      <span className="block truncate text-xs text-slate-500 dark:text-slate-400">{where}</span>
-                    </span>
-                    <span className="flex shrink-0 items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-                      <span className={`h-2 w-2 rounded-full ${STATUS_DOT[device.status] ?? STATUS_DOT.NEVER_SEEN}`} />
-                      {statusLabel(device.status)}
-                    </span>
-                    {checked ? <Check size={15} className="shrink-0 text-emerald-600 dark:text-emerald-400" /> : null}
-                  </button>
+                  <div key={device.id}>
+                    <div className="flex items-center gap-2 px-1 pb-1.5">
+                      <Cpu size={15} className="shrink-0 text-slate-400" />
+                      <span className="min-w-0 flex-1 truncate text-sm font-semibold">{device.name}</span>
+                      <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400">
+                        <span className={`h-2 w-2 rounded-full ${STATUS_DOT[device.status] ?? STATUS_DOT.NEVER_SEEN}`} />
+                        {statusLabel(device.status)} · {device.pots.length} of {MAX_PORTS} ports in use
+                      </span>
+                    </div>
+                    <p className="-mt-1 px-1 pb-1.5 pl-7 text-[11px] text-slate-400">{where}</p>
+                    <div role="radiogroup" aria-label={`Ports on ${device.name}`} className="grid grid-cols-3 gap-1.5">
+                      {slots.map((port) => {
+                        const pot = device.pots.find((p) => p.port === port);
+                        const isNew = port === newPort;
+                        const checked = selected?.deviceId === device.id && selected.port === port;
+                        const value = reading.get(port);
+                        return (
+                          <button
+                            key={port}
+                            type="button"
+                            role="radio"
+                            aria-checked={checked}
+                            disabled={Boolean(pot)}
+                            onClick={() => setPicked({ deviceId: device.id, port })}
+                            title={pot ? `Port ${port} waters ${pot.label}` : isNew ? `Adds port ${port} to ${device.name}` : `Port ${port} is free`}
+                            className={`flex flex-col rounded-lg border px-2 py-1.5 text-left transition disabled:cursor-not-allowed ${
+                              checked
+                                ? "border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500/50 dark:bg-emerald-500/10"
+                                : pot
+                                  ? "border-transparent bg-slate-100 opacity-60 dark:bg-slate-800/60"
+                                  : isNew
+                                    ? "border-dashed border-slate-300 hover:border-emerald-400 dark:border-slate-700"
+                                    : "border-slate-200 hover:border-emerald-400 dark:border-slate-700"
+                            }`}
+                          >
+                            <span className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                              Port {port}
+                              {checked ? <Check size={12} className="text-emerald-600 dark:text-emerald-400" /> : null}
+                            </span>
+                            <span
+                              className={`truncate text-xs font-semibold ${
+                                pot ? "text-slate-500" : isNew ? "text-emerald-700 dark:text-emerald-300" : "text-emerald-700 dark:text-emerald-300"
+                              }`}
+                            >
+                              {pot ? pot.label : isNew ? "+ New port" : "Free"}
+                            </span>
+                            {!pot ? (
+                              <span className="text-[10px] text-slate-400">
+                                {isNew ? "wire probe + relay" : value != null ? `probe ${Math.round(value)}%` : "no probe yet"}
+                              </span>
+                            ) : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 );
               })}
+              {selected ? (
+                <p className="px-1 pt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+                  This pot will use <b>port {selected.port}</b> on{" "}
+                  <b>{freeDevices.find((d) => d.id === selected.deviceId)?.name}</b> — its soil probe and its pump.
+                </p>
+              ) : null}
             </div>
           ) : null}
           <ChoiceCard checked={deviceChoice === "new"} onSelect={() => setDeviceChoice("new")} title="Register a new device" hint="You'll get its key after saving." />
@@ -472,7 +544,7 @@ function PlantingFields({
         {deviceChoice === "new" ? (
           <div className="space-y-3 rounded-xl border border-slate-200 p-3 dark:border-slate-800">
             <div className="grid grid-cols-2 gap-3">
-              <Input label="Device name" value={newDevice.name} onChange={(v) => setNewDevice((d) => ({ ...d, name: v }))} placeholder="e.g. Pot 4 sensor" required />
+              <Input label="Device name" value={newDevice.name} onChange={(v) => setNewDevice((d) => ({ ...d, name: v }))} placeholder="e.g. Balcony board" required />
               <Input label="Hardware ID" value={newDevice.hardwareId} onChange={(v) => setNewDevice((d) => ({ ...d, hardwareId: v }))} placeholder="e.g. ESP32-GARDEN-03" required />
             </div>
             <label className="block">
@@ -783,7 +855,7 @@ export function DeviceKey({ created }: { created: { name: string; hardwareId: st
       <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600 dark:bg-slate-950/60 dark:text-slate-300">
         <p className="font-semibold">Next steps</p>
         <ol className="mt-1 list-decimal space-y-1 pl-4">
-          <li>For the simulator, use these as <code>DEVICE_ID</code> / <code>DEVICE_KEY</code>. SmartAgri ESP32 boards don&apos;t need this — they get their key automatically when claimed on the Sensors page.</li>
+          <li>For the simulator, use these as <code>DEVICE_ID</code> / <code>DEVICE_KEY</code>. SmartAgri ESP32 boards don&apos;t need this — they get their key automatically when claimed on the Devices page.</li>
           <li>Power it on — it shows as Online once its first reading arrives.</li>
         </ol>
       </div>

@@ -18,12 +18,12 @@ and Smart Irrigation Management"*.
 | Feature | Where in the app |
 |---|---|
 | 🪴 Gardens, pots (POT-1, POT-2…) and plants — 86-plant guide with Bangla names and recommended soil & watering | Gardens, Pots, Plants |
-| 🌡️ Live soil moisture from an ESP32 per pot; probe faults and offline boards are flagged | Dashboard, Sensors |
+| 🌡️ Live soil moisture from an ESP32 per pot; probe faults and offline boards are flagged | Dashboard, Devices |
 | 💧 Automatic irrigation per pot (start / stop levels), manual pump control, history | Irrigation |
 | 🔬 Leaf disease detection with first steps + home remedies; every scan saved | Disease AI |
 | 📊 Moisture vs. target, waterings, weather, activity log, Excel export | Analytics |
 | 🔔 Alerts in the app and on Telegram (your own bot) | Bell, Settings |
-| 📶 Add a board with no code: Wi-Fi setup page + BOOT button; restart / reset / sleep it remotely | Sensors |
+| 📶 Add a board with no code: Wi-Fi setup page + BOOT button; restart / reset / sleep it remotely | Devices |
 | 🌦️ Weather for each garden's location | Garden details, Dashboard |
 
 Proposal features **#4 Recommendations** and **#5 Crop health score** are implemented as
@@ -135,7 +135,7 @@ The **Disease AI** page also shows a status chip: **AI model ready**, **demo mod
   citrus, apple…). For other plants the report says so and treats the result as a
   rough guide.
 
-### 6. Connect a sensor board (optional)
+### 6. Connect a device (optional)
 
 **Wiring (ESP32 dev board)**
 
@@ -145,6 +145,20 @@ The **Disease AI** page also shows a status chip: **AI model ready**, **demo mod
 | Relay module — IN | GPIO 5 |
 | Relay / probe power | 3V3 / 5V and GND as the module requires |
 | Pump | through the relay's COM + NO contacts |
+
+**Several pots on one board (up to 6):** each pot gets its own soil probe and relay
+channel (use a 2/4/6-channel relay module and power the pumps from a separate
+5 V / 12 V supply with a shared GND). With firmware 2.9+ add ports in the app:
+**Devices → the board's card → + Add port** (no re-flash). Older firmware: set
+`#define PORT_COUNT 3` (1–6) in `config.h`.
+
+| Port | 1 | 2 | 3 | 4 | 5 | 6 |
+|---|---|---|---|---|---|---|
+| Soil probe (ADC1) | 36 | 39 | 34 | 35 | 32 | 33 |
+| Relay IN | 5 | 18 | 19 | 21 | 22 | 23 |
+
+The card lists **Port 1, Port 2…** with each probe's reading and pump state — connect a pot
+to each (card **⋮ → Move or rename**).
 
 **Flash the firmware (once)**
 
@@ -166,12 +180,27 @@ arduino-cli upload  --fqbn esp32:esp32:esp32:UploadSpeed=115200 -p /dev/cu.usbse
 1. Power the board. On your phone, join the Wi-Fi **SmartAgri-Setup**.
 2. Pick your home Wi-Fi (2.4 GHz) and enter the server address shown in the app,
    e.g. `http://192.168.1.10:3000` (your computer's LAN IP — not `localhost`).
-3. In the app: **Sensors → Add device**, then press the board's **BOOT** button when asked.
+3. In the app: **Devices → Add device**, then press the board's **BOOT** button when asked.
 4. Connect it to a pot (**Connect to a pot** on its card). Readings start within seconds.
 
 Hold **BOOT for 3 s** to reopen the Wi-Fi setup page. From the app (card ⋮ menu) you
 can **Restart**, **Reset Wi-Fi**, **Turn off (sleep)** or **Factory reset** the board.
 If the board can't reach the app for 60 s it switches the pump off by itself.
+
+**Board status on the Devices page.** The board reports every 20 s — and at once when a
+probe reading changes by 2% or more (firmware 2.8+), so new readings show up in the app
+within about 5 s. Its status comes from how long ago the app last heard from it:
+
+| Status | Last report |
+|---|---|
+| 🟢 **Online** | within 45 s |
+| 🟡 **Delayed** | 45–90 s ago (2 missed reports) |
+| 🔴 **Offline** | over 90 s ago — you also get an alert |
+
+"Last seen" shows seconds under a minute (*30 s ago*, *40 s ago*), then minutes. So an
+unplugged board shows Delayed after about 45 s and Offline after about 90 s. To change
+the timing, set `DEVICE_STALE_THRESHOLD_SECONDS` (default 45) and
+`DEVICE_OFFLINE_THRESHOLD_SECONDS` (default 90) in `.env`, then restart the app.
 
 **No hardware?** Use the simulator: register a device, then set `DEVICE_ID`,
 `DEVICE_KEY` and `POT_IDS` in `.env` (see `.env.example`) and run `npm run simulate`.
@@ -221,9 +250,15 @@ then **restart `npm run dev`** (the running server keeps the old database client
 | Board online but no readings | It isn't connected to a pot yet — use **Connect to a pot** on its card. |
 | Upload to the board fails | Add `:UploadSpeed=115200` to the FQBN; hold BOOT while it starts uploading. |
 
+## Go live
+
+Vercel (app) + Supabase (database, photo storage) + Hugging Face (AI) — all free tiers.
+Step by step: **[docs/DEPLOY.md](docs/DEPLOY.md)**.
+
 ## More docs
 
 - [docs/RUN_AND_TEST.md](docs/RUN_AND_TEST.md) — testing each feature, API examples
 - [docs/FEATURE_MAP.md](docs/FEATURE_MAP.md) — where each feature lives in the code
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — design and data model
 - [docs/TELEGRAM.md](docs/TELEGRAM.md) — Telegram alerts
+- [docs/DEPLOY.md](docs/DEPLOY.md) — deploying to Vercel + Supabase

@@ -38,7 +38,7 @@ export async function claimTargetError(target: ClaimTarget) {
     if (!pot) return "Pot not found in this garden";
     const existing = await prisma.device.findUnique({ where: { hardwareId: target.hardwareId }, select: { id: true } });
     const occupant = await otherDeviceOnPot(target.potId, existing?.id);
-    if (occupant) return `This pot already has a sensor (${occupant}). Disconnect it first.`;
+    if (occupant) return `This pot already has a device (${occupant}). Disconnect it first.`;
   }
   const existing = await prisma.device.findUnique({ where: { hardwareId: target.hardwareId }, select: { userId: true } });
   if (existing && existing.userId !== target.userId) return "This board is registered to another account.";
@@ -73,9 +73,9 @@ export async function completeClaim(target: ClaimTarget, { deliverNow }: { deliv
           },
           select: { id: true, name: true, hardwareId: true },
         });
-    // One board serves one pot: replace any previous connection.
+    // (Re)claiming starts fresh: clear old connections; the chosen pot goes on port 1.
     await tx.devicePotMapping.deleteMany({ where: { deviceId: saved.id } });
-    if (target.potId) await tx.devicePotMapping.create({ data: { deviceId: saved.id, potId: target.potId } });
+    if (target.potId) await tx.devicePotMapping.create({ data: { deviceId: saved.id, potId: target.potId, port: 1 } });
     await tx.devicePairing.update({
       where: { hardwareId: target.hardwareId },
       data: {

@@ -11,11 +11,18 @@ import { prisma } from "@/lib/db";
 import { generateDeviceKey } from "@/lib/device-key";
 import { findPlantProfile } from "@/lib/plant-catalog";
 import { nextPotNumber, potCode } from "@/lib/pot-number";
+import { MAX_PORTS, firstFreePort, supportsRemotePorts } from "@/lib/device-pot";
 
 const percent = z.number().min(0).max(100);
 
 const deviceSchema = z.discriminatedUnion("mode", [
-  z.object({ mode: z.literal("existing"), deviceId: z.string().trim().min(1) }),
+  z.object({
+    mode: z.literal("existing"),
+    deviceId: z.string().trim().min(1),
+    // Which port of the board waters this pot. Omitted = its first free port.
+    // A port beyond the board's current count adds it (firmware 2.9+).
+    port: z.number().int().min(1).max(MAX_PORTS).optional(),
+  }),
   z.object({
     mode: z.literal("new"),
     name: z.string().trim().min(1).max(80),
@@ -69,16 +76,53 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const { pot, plant, device } = parsed.data;
   const profile = findPlantProfile(plant.commonName);
 
+  let port = 1;
+  // Set when the chosen port is new on the board: its port count grows to this.
+  let growTo: number | null = null;
   if (device?.mode === "existing") {
     const existing = await prisma.device.findFirst({
       where: { id: device.deviceId, userId },
-      select: { potMappings: { select: { pot: { select: { label: true } } }, take: 1 } },
+      select: {
+        name: true,
+        gardenId: true,
+        portCount: true,
+        firmwareVersion: true,
+        potMappings: { select: { port: true, pot: { select: { label: true } } } },
+      },
     });
     if (!existing) return NextResponse.json({ error: "Device not found" }, { status: 404 });
-    // One board serves one pot: it must be disconnected from its current pot first.
-    const busyOn = existing.potMappings[0]?.pot.label;
-    if (busyOn) {
-      return NextResponse.json({ error: `That device is already connected to ${busyOn}. Disconnect it first.` }, { status: 409 });
+    const used = existing.potMappings.map((link) => link.port);
+    // Its other pots live in another garden — moving it here would cut them off.
+    if (used.length && existing.gardenId !== gardenId) {
+      return NextResponse.json({ error: `${existing.name} already serves pots in another garden.` }, { status: 409 });
+    }
+    const canGrow = supportsRemotePorts(existing.firmwareVersion);
+    if (device.port) {
+      const taken = existing.potMappings.find((link) => link.port === device.port);
+      if (taken) {
+        return NextResponse.json({ error: `Port ${device.port} on ${existing.name} already waters ${taken.pot.label}.` }, { status: 409 });
+      }
+      if (device.port > existing.portCount) {
+        if (!canGrow) {
+          return NextResponse.json(
+            { error: `${existing.name} has ${existing.portCount} port${existing.portCount === 1 ? "" : "s"}. Update it to firmware 2.9 to add ports from the app.` },
+            { status: 400 },
+          );
+        }
+        growTo = device.port;
+      }
+      port = device.port;
+    } else {
+      const free = firstFreePort(used, existing.portCount);
+      if (free) port = free;
+      else if (canGrow && existing.portCount < MAX_PORTS) {
+        port = growTo = existing.portCount + 1;
+      } else {
+        return NextResponse.json(
+          { error: `All ${existing.portCount} port${existing.portCount === 1 ? " is" : "s are"} in use on ${existing.name}. Disconnect a pot first.` },
+          { status: 409 },
+        );
+      }
     }
   }
   const newKey = device?.mode === "new" ? generateDeviceKey() : null;
@@ -123,7 +167,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
             ? // A free board from another garden (or none) moves into this one.
               await tx.device.update({
                 where: { id: device.deviceId },
-                data: { gardenId },
+                // A new port: the board picks up the larger count on its next poll.
+                data: { gardenId, ...(growTo ? { portCount: growTo, desiredPorts: growTo } : {}) },
                 select: { id: true, name: true, hardwareId: true },
               })
             : await tx.device.create({
@@ -137,7 +182,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
                 },
                 select: { id: true, name: true, hardwareId: true },
               });
-        await tx.devicePotMapping.create({ data: { deviceId: connectedDevice.id, potId: newPot.id } });
+        await tx.devicePotMapping.create({ data: { deviceId: connectedDevice.id, potId: newPot.id, port } });
       }
       return { pot: newPot, plant: newPlant, device: connectedDevice };
     });
