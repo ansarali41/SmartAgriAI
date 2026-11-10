@@ -21,7 +21,7 @@ const path = require("node:path");
 // `node simulator.js` runs outside Next.js, so load .env using Next's own
 // environment loader. Resolve from this file, not process.cwd(), so it works
 // from any folder. Explicit shell variables still take precedence.
-loadEnvConfig(path.resolve(__dirname));
+loadEnvConfig(path.resolve(__dirname), true); // development mode → .env.development
 
 const BACKEND_URL = process.env.API_URL || process.env.BASE_URL || "http://localhost:3000";
 const DEVICE_ID = process.env.DEVICE_ID;

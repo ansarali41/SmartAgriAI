@@ -27,8 +27,8 @@ cd smartagriai
 createdb smartagriai
 
 # 2.2 Configure environment
-cp .env.example .env
-# Edit .env:
+cp .env.example .env.development
+# Edit .env.development:
 #   DATABASE_URL="postgresql://<your-username>@localhost:5432/smartagriai?schema=public"
 #   AUTH_SECRET="<run: openssl rand -base64 32>"
 
@@ -260,9 +260,9 @@ npm run db:seed       # re-seed (wipes & recreates the demo user's data)
 | Symptom | Fix |
 |---|---|
 | `EADDRINUSE :3000` | Another app is on 3000 → `PORT=3100 npm run dev` (and pass `BASE_URL=http://localhost:3100` to the simulator). |
-| Disease analysis returns 502 | The AI service (Terminal 2) isn't running, or `AI_SERVICE_URL` in `.env` is wrong. |
+| Disease analysis returns 502 | The AI service (Terminal 2) isn't running, or `AI_SERVICE_URL` in `.env.development` is wrong. |
 | `http://localhost:8001/` → `{"detail":"Not Found"}` | Normal — there is no `/` route. Check `http://localhost:8001/health` and POST to `/predict`. |
 | AI `/health` shows `missing_model` | TensorFlow isn't installed — run `pip install -r requirements.txt` in `services/ai` (TF 2.20 works on Python 3.10–3.13), then restart `uvicorn`. The mock still returns full results until then. |
-| Weather shows fallback data | No `OPENWEATHER_API_KEY` set → it uses the free Open-Meteo API. Add a key to `.env` for OpenWeatherMap. |
+| Weather shows fallback data | No `OPENWEATHER_API_KEY` set → it uses the free Open-Meteo API. Add a key to `.env.development` for OpenWeatherMap. |
 | `Can't reach database server` | PostgreSQL isn't running (`pg_isready`) or `DATABASE_URL` is wrong. |
-| Login fails | Re-run `npm run db:seed`; ensure `AUTH_SECRET` is set in `.env`. |
+| Login fails | Re-run `npm run db:seed`; ensure `AUTH_SECRET` is set in `.env.development`. |

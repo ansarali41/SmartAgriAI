@@ -1,6 +1,6 @@
 # Telegram alerts
 
-Each user connects their **own** Telegram bot from the app — nothing goes in `.env`.
+Each user connects their **own** Telegram bot from the app — nothing goes in an env file.
 
 ## Set up (per user, in the app)
 

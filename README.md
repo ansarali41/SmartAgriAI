@@ -77,15 +77,17 @@ On macOS: `brew install node postgresql@16 python@3.13 arduino-cli`, then `brew 
 ```bash
 npm install
 createdb smartagriai
-cp .env.example .env
+cp .env.example .env.development
 ```
 
-Edit `.env`:
+Edit `.env.development` (your local settings — git-ignored):
 
 - `DATABASE_URL` — e.g. `postgresql://YOUR_MAC_USERNAME@localhost:5432/smartagriai?schema=public`
 - `AUTH_SECRET` — a long random value: `openssl rand -base64 32`
 
-Everything else has working defaults. Telegram is **not** configured here — see [Telegram alerts](#telegram-alerts-optional).
+Everything else has working defaults. `npm run dev` and the `db:*` / `simulate` scripts read
+this file. Production values live separately in `.env.vercel` (see [docs/DEPLOY.md](docs/DEPLOY.md)),
+which nothing loads automatically. Telegram is **not** configured here — see [Telegram alerts](#telegram-alerts-optional).
 
 ### 3. Create the database tables (and optional starter data)
 
@@ -220,14 +222,14 @@ within about 5 s. Its status comes from how long ago the app last heard from it:
 "Last seen" shows seconds under a minute (*30 s ago*, *40 s ago*), then minutes. So an
 unplugged board shows Delayed after about 45 s and Offline after about 90 s. To change
 the timing, set `DEVICE_STALE_THRESHOLD_SECONDS` (default 45) and
-`DEVICE_OFFLINE_THRESHOLD_SECONDS` (default 90) in `.env`, then restart the app.
+`DEVICE_OFFLINE_THRESHOLD_SECONDS` (default 90) in `.env.development` (or in Vercel), then restart the app.
 
 **No hardware?** Use the simulator: register a device, then set `DEVICE_ID`,
-`DEVICE_KEY` and `POT_IDS` in `.env` (see `.env.example`) and run `npm run simulate`.
+`DEVICE_KEY` and `POT_IDS` in `.env.development` (see `.env.example`) and run `npm run simulate`.
 
 ### Telegram alerts (optional)
 
-Nothing goes in `.env`. In the app: **Settings → Telegram alerts** → paste a bot token
+Nothing goes in an env file. In the app: **Settings → Telegram alerts** → paste a bot token
 from **@BotFather** → **Connect bot** → open the bot and press **Start** → **I've pressed
 Start** → **Send test message**. Details: [docs/TELEGRAM.md](docs/TELEGRAM.md).
 

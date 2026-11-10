@@ -1,7 +1,7 @@
 // Private storage for leaf photos sent to Disease AI.
 //
 // - Live (Vercel): Supabase Storage, when SUPABASE_URL and
-//   SUPABASE_SERVICE_ROLE_KEY are set. The bucket is private and created on
+//   SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_SECRET_KEY) are set. The bucket is private and created on
 //   first use; images are only served through the authenticated image route.
 // - Local: files under DISEASE_IMAGE_UPLOAD_DIR (default .data/…).
 //   Vercel's disk is temporary, so this mode is for development only.
@@ -22,7 +22,8 @@ function uploadDir() {
 
 function supabase() {
   const url = process.env.SUPABASE_URL?.replace(/\/+$/, "");
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  // Legacy service_role key, or Supabase's newer secret key (sb_secret_…) — both work.
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY;
   if (!url || !key) return null;
   return { url, key, bucket: process.env.SUPABASE_STORAGE_BUCKET || "disease-images" };
 }

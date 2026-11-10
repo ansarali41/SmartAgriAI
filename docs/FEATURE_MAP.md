@@ -26,7 +26,7 @@ comment; this table is the index. Paths are under `src/` unless noted.
 | Device list / edit / remote actions | `app/api/devices/route.ts`, `devices/[id]/route.ts`, `devices/[id]/action/route.ts`, `lib/device-actions.ts` |
 | Pairing a new board (Wi-Fi + BOOT button) | `app/api/iot/pair/route.ts`, `app/api/devices/pairing/route.ts`, `lib/device-pairing.ts`, `lib/device-claim.ts`, `components/AddDeviceGuide.tsx` |
 | Device key hashing / auth | `lib/device-key.ts`, `lib/device-auth.ts` |
-| Online / delayed / offline (45 s / 90 s, from `.env`) | `lib/device-status.ts`, `lib/device-monitoring.ts`; "Last seen" text: `timeAgo` in `components/device-ui.ts` |
+| Online / delayed / offline (45 s / 90 s, from env) | `lib/device-status.ts`, `lib/device-monitoring.ts`; "Last seen" text: `timeAgo` in `components/device-ui.ts` |
 | UI | `app/(app)/sensors/page.tsx`, pot cards on Pots / garden pages |
 | Firmware | `iot/esp32/src/main.ino`; simulator `simulator.js` (`npm run simulate`) |
 

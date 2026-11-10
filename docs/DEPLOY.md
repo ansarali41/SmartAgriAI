@@ -35,6 +35,16 @@ free API key, nothing to host). Then leave `AI_SERVICE_URL` / `AI_SERVICE_TOKEN`
 
 Free Spaces sleep after ~48 h idle; the first scan afterwards takes up to a minute.
 
+## Env files
+
+| File | Used by | Contents |
+|---|---|---|
+| `.env.development` | `npm run dev`, `npm run db:*`, `npm run simulate`, `npm run telegram:worker:dev` | local database + local secrets |
+| `.env.vercel` | nothing automatically | your production values — copy them into Vercel; run a command against the live DB only on purpose: `npx dotenv -e .env.vercel -- npx prisma migrate status` |
+
+Both are git-ignored (`.env*`, except `.env.example`). Supabase's newer secret key can be
+set as `SUPABASE_SECRET_KEY` (or the legacy `SUPABASE_SERVICE_ROLE_KEY`).
+
 ## 3. Vercel
 
 1. Push the project to GitHub. vercel.com → **Add New → Project** → import the repo.
@@ -49,7 +59,7 @@ Free Spaces sleep after ~48 h idle; the first scan afterwards takes up to a minu
 | `AUTH_SECRET` | `openssl rand -base64 32` — keep it; changing it logs everyone out and disconnects Telegram bots |
 | `AUTH_TRUST_HOST` | `true` |
 | `SUPABASE_URL` | Supabase project URL |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service_role / secret key |
+| `SUPABASE_SECRET_KEY` | Supabase secret key (`sb_secret_…`; or `SUPABASE_SERVICE_ROLE_KEY` = legacy service_role key) |
 | `AI_SERVICE_URL` | `https://YOUR-SPACE.hf.space` |
 | `AI_SERVICE_TOKEN` | same value as the Space secret |
 | `CRON_SECRET` | `openssl rand -hex 24` |
